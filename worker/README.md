@@ -24,10 +24,14 @@ Alternative implementation of the image API in `/server/index.mjs` using Cloudfl
 
 ## Frontend integration
 
-The frontend now targets the Cloudflare Worker URL by default during local development: `http://localhost:8787`.
+The frontend reads the image API base URL from Vite env files.
+
+Local development uses `.env.development`, which is configured to target `http://localhost:8787`.
 
 To override the API target, set `VITE_IMAGE_API_BASE_URL` before starting Vite. Example:
 
 ```bash
 VITE_IMAGE_API_BASE_URL="https://your-worker-subdomain.workers.dev" npm run dev:web
 ```
+
+Production builds read `.env.production`, which is configured to use `https://life-config-worker.fast.workers.dev`.
