@@ -1,20 +1,16 @@
-import "./style.css";
-import {
-  createDefaultConfig,
-  randomizeConfig,
-  configToJSON,
-  configFromJSON,
-  structuralParameters,
-  aiAppearanceParameters,
-} from "./configurator/index.ts";
-import type { OrganismConfig, ParameterDef } from "./configurator/index.ts";
-import { generateOrganism } from "./simulator/index.ts";
-import { createRenderer } from "./renderer/index.ts";
 import { applyAIAppearance, applyAIPostProcessing } from "./ai/index.ts";
+import type { OrganismConfig, ParameterDef } from "./configurator/index.ts";
+import { aiAppearanceParameters, configFromJSON, configToJSON, createDefaultConfig, randomizeConfig, structuralParameters } from "./configurator/index.ts";
+import { createRenderer } from "./renderer/index.ts";
+import { generateOrganism } from "./simulator/index.ts";
+import "./style.css";
 
 // --- State ---
 let config: OrganismConfig = createDefaultConfig();
 const renderer = createRenderer();
+const apiBaseUrl = "http://localhost:3001";
+let statusMessage = "";
+let isRendering = false;
 
 // --- UI Building ---
 function buildUI() {
@@ -79,9 +75,7 @@ function buildParameterPanel() {
 
 function buildParamSelect(param: ParameterDef, disabled: boolean = false): string {
   const value = config[param.name] ?? param.defaultValue;
-  const options = param.values
-    .map((v) => `<option value="${v}" ${v === value ? "selected" : ""}>${v.replace(/_/g, " ")}</option>`)
-    .join("");
+  const options = param.values.map((v) => `<option value="${v}" ${v === value ? "selected" : ""}>${v.replace(/_/g, " ")}</option>`).join("");
   return `
     <div class="param-row">
       <label>${param.label}</label>
@@ -94,6 +88,7 @@ function buildToolbar() {
   const toolbar = document.getElementById("toolbar")!;
   toolbar.innerHTML = `
     <button class="primary" id="btn-generate">Generate</button>
+    <button id="btn-render">Render</button>
     <button id="btn-random">Randomize</button>
     <button id="btn-save">Save</button>
     <button id="btn-load">Load</button>
@@ -111,9 +106,11 @@ function buildToolbar() {
     rebuildAndRegenerate();
   });
 
+  document.getElementById("btn-render")!.addEventListener("click", renderImage);
   document.getElementById("btn-save")!.addEventListener("click", saveConfig);
   document.getElementById("btn-load")!.addEventListener("click", loadConfig);
   document.getElementById("btn-export")!.addEventListener("click", exportImage);
+  updateRenderButton();
 }
 
 function setupViewport() {
@@ -156,7 +153,79 @@ function updateSeedInput() {
 
 function updateStatusBar() {
   const bar = document.getElementById("status-bar");
-  if (bar) bar.textContent = `seed: ${config.seed}`;
+  if (!bar) return;
+
+  bar.textContent = statusMessage ? `seed: ${config.seed} · ${statusMessage}` : `seed: ${config.seed}`;
+}
+
+function updateRenderButton() {
+  const button = document.getElementById("btn-render") as HTMLButtonElement | null;
+  if (!button) return;
+
+  button.disabled = isRendering;
+  button.textContent = isRendering ? "Rendering..." : "Render";
+}
+
+function setStatusMessage(message: string) {
+  statusMessage = message;
+  updateStatusBar();
+}
+
+function humanizeValue(value: string): string {
+  return value.replace(/_/g, " ");
+}
+
+function buildRenderPrompt(currentConfig: OrganismConfig): string {
+  return [
+    "A highly detailed scientific specimen portrait of an alien lifeform",
+    `with a ${humanizeValue(currentConfig.body_plan)} body plan`,
+    `${humanizeValue(currentConfig.silhouette_type)} silhouette`,
+    `${humanizeValue(currentConfig.core_shape)} core shape`,
+    `${humanizeValue(currentConfig.core_surface_form)} surface`,
+    `${humanizeValue(currentConfig.appendage_length_type)} ${humanizeValue(currentConfig.appendage_family)}`,
+    `${humanizeValue(currentConfig.appendage_motion_impression)} motion`,
+    `${humanizeValue(currentConfig.segmentation_type)} segmentation`,
+    `${humanizeValue(currentConfig.branching_type)} branching`,
+    `${humanizeValue(currentConfig.outline_profile)} outline`,
+    `${humanizeValue(currentConfig.focal_feature)} focal feature`,
+    `${humanizeValue(currentConfig.membrane_type)} membrane`,
+    "centered composition, clean background, studio lighting, ultra detailed biology illustration",
+  ].join(", ");
+}
+
+async function renderImage() {
+  if (isRendering) return;
+
+  isRendering = true;
+  updateRenderButton();
+  setStatusMessage("rendering image");
+
+  try {
+    const prompt = buildRenderPrompt(config);
+    const url = new URL("/api/generate", apiBaseUrl);
+    url.searchParams.set("prompt", prompt);
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Image API failed with status ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const downloadUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = downloadUrl;
+    a.download = `life-config-render-${config.seed}.webp`;
+    a.click();
+    URL.revokeObjectURL(downloadUrl);
+
+    setStatusMessage("render complete");
+  } catch (error) {
+    console.error("Failed to render image:", error);
+    setStatusMessage("render failed");
+  } finally {
+    isRendering = false;
+    updateRenderButton();
+  }
 }
 
 // --- Save/Load/Export ---
