@@ -27,11 +27,13 @@ app.get("/api/generate", async (req, res) => {
   }
 
   try {
-    const output = await replicate.run("black-forest-labs/flux-schnell", {
+    const output = await replicate.run("black-forest-labs/flux-2-klein-4b", {
       input: {
         prompt,
         image_format: "webp",
         aspect_ratio: "1:1",
+        output_quality: 95,
+        output_megapixels: "1",
       },
     });
 
