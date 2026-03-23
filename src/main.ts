@@ -9,8 +9,17 @@ import "./style.css";
 let config: OrganismConfig = createDefaultConfig();
 const renderer = createRenderer();
 const apiBaseUrl = "http://localhost:3001";
+const apiKeyStorageKey = "life-config.replicate-api-key";
 let statusMessage = "";
 let isRendering = false;
+
+function getStoredApiKey(): string {
+  return window.localStorage.getItem(apiKeyStorageKey) ?? "";
+}
+
+function setStoredApiKey(value: string) {
+  window.localStorage.setItem(apiKeyStorageKey, value.trim());
+}
 
 // --- UI Building ---
 function buildUI() {
@@ -35,7 +44,23 @@ function buildUI() {
 
 function buildParameterPanel() {
   const scroll = document.getElementById("panel-scroll")!;
+  const savedApiKey = getStoredApiKey();
   let html = "";
+
+  html += `
+    <div class="api-key-row">
+      <label for="api-key-input">API Key</label>
+      <input
+        type="password"
+        class="text-input"
+        id="api-key-input"
+        value="${savedApiKey}"
+        placeholder="Enter Replicate API key"
+        autocomplete="off"
+        spellcheck="false"
+      >
+    </div>
+  `;
 
   // Seed
   html += `
@@ -64,12 +89,21 @@ function buildParameterPanel() {
   // Event listeners for parameters
   scroll.addEventListener("change", (e) => {
     const target = e.target as HTMLSelectElement | HTMLInputElement;
-    if (target.id === "seed-input") {
+    if (target.id === "api-key-input") {
+      setStoredApiKey(target.value);
+    } else if (target.id === "seed-input") {
       config.seed = parseInt(target.value, 10) || 0;
     } else if (target.dataset.param) {
       config[target.dataset.param] = target.value;
     }
     regenerate();
+  });
+
+  scroll.addEventListener("input", (e) => {
+    const target = e.target as HTMLInputElement;
+    if (target.id === "api-key-input") {
+      setStoredApiKey(target.value);
+    }
   });
 }
 
@@ -192,6 +226,15 @@ function buildRenderPrompt(currentConfig: OrganismConfig): string {
 async function renderImage() {
   if (isRendering) return;
 
+  const apiKey = getStoredApiKey();
+
+  if (!apiKey) {
+    setStatusMessage("enter api key");
+    const apiKeyInput = document.getElementById("api-key-input") as HTMLInputElement | null;
+    apiKeyInput?.focus();
+    return;
+  }
+
   isRendering = true;
   updateRenderButton();
   setStatusMessage("rendering image");
@@ -205,6 +248,7 @@ async function renderImage() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "x-api-key": apiKey,
       },
       body: JSON.stringify({
         prompt,
@@ -212,7 +256,18 @@ async function renderImage() {
       }),
     });
     if (!response.ok) {
-      throw new Error(`Image API failed with status ${response.status}`);
+      let message = `Image API failed with status ${response.status}`;
+
+      try {
+        const errorPayload = (await response.json()) as { error?: string };
+        if (errorPayload?.error) {
+          message = errorPayload.error;
+        }
+      } catch {
+        // Leave the default status-based error in place when the response isn't JSON.
+      }
+
+      throw new Error(message);
     }
 
     const blob = await response.blob();
@@ -226,7 +281,7 @@ async function renderImage() {
     setStatusMessage("render complete");
   } catch (error) {
     console.error("Failed to render image:", error);
-    setStatusMessage("render failed");
+    setStatusMessage(error instanceof Error ? error.message : "render failed");
   } finally {
     isRendering = false;
     updateRenderButton();

@@ -58,6 +58,11 @@ select {
   cursor: pointer;
 }
 
+input {
+  font-family: inherit;
+  font-size: inherit;
+}
+
 select:focus {
   border-color: var(--accent);
 }
@@ -143,6 +148,13 @@ label {
   margin-bottom: 6px;
 }
 
+.api-key-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
 /* === Viewport === */
 .viewport {
   flex: 1;
@@ -220,7 +232,8 @@ label {
   display: none !important;
 }
 
-.seed-input {
+.seed-input,
+.text-input {
   font-family: inherit;
   font-size: inherit;
   color: var(--fg);
@@ -232,7 +245,12 @@ label {
   outline: none;
 }
 
-.seed-input:focus {
+.text-input {
+  width: 100%;
+}
+
+.seed-input:focus,
+.text-input:focus {
   border-color: var(--accent);
 }
 

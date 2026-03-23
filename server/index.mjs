@@ -6,13 +6,6 @@ import Replicate from "replicate";
 
 const app = express();
 const port = Number.parseInt(process.env.PORT || "3001", 10);
-const replicateToken = process.env.REPLICATE_API_TOKEN;
-
-if (!replicateToken) {
-  throw new Error("Missing REPLICATE_API_TOKEN in the environment.");
-}
-
-const replicate = new Replicate({ auth: replicateToken });
 const dataDir = path.resolve(process.cwd(), "data");
 
 app.use(cors());
@@ -56,16 +49,29 @@ async function saveDebugImages(referenceImage, imageBuffer, outputContentType) {
   ]);
 }
 
-async function handleGenerate(prompt, referenceImage, res) {
+function extractApiKey(req) {
+  const headerValue = req.get("x-api-key");
+
+  return typeof headerValue === "string" ? headerValue.trim() : "";
+}
+
+async function handleGenerate(req, prompt, referenceImage, res) {
   const normalizedPrompt = typeof prompt === "string" ? prompt.trim() : "";
   const normalizedReferenceImage = typeof referenceImage === "string" ? referenceImage.trim() : "";
+  const apiKey = extractApiKey(req);
 
   if (!normalizedPrompt) {
     res.status(400).json({ error: "Missing required query parameter: prompt" });
     return;
   }
 
+  if (!apiKey) {
+    res.status(401).json({ error: "Missing API key. Provide it in the x-api-key header." });
+    return;
+  }
+
   try {
+    const replicate = new Replicate({ auth: apiKey });
     const output = await replicate.run("black-forest-labs/flux-2-klein-4b", {
       input: {
         images: normalizedReferenceImage ? [normalizedReferenceImage] : [],
@@ -106,11 +112,11 @@ async function handleGenerate(prompt, referenceImage, res) {
 }
 
 app.get("/api/generate", async (req, res) => {
-  await handleGenerate(req.query.prompt, req.query.referenceImage, res);
+  await handleGenerate(req, req.query.prompt, req.query.referenceImage, res);
 });
 
 app.post("/api/generate", async (req, res) => {
-  await handleGenerate(req.body?.prompt, req.body?.referenceImage, res);
+  await handleGenerate(req, req.body?.prompt, req.body?.referenceImage, res);
 });
 
 app.listen(port, () => {
