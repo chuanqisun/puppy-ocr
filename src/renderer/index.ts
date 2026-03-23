@@ -13,6 +13,7 @@ export interface Renderer {
   dispose(): void;
   resize(): void;
   getRenderer(): THREE.WebGLRenderer;
+  captureReferenceImage(): Promise<string>;
 }
 
 export function createRenderer(): Renderer {
@@ -121,6 +122,24 @@ export function createRenderer(): Renderer {
 
     getRenderer() {
       return renderer;
+    },
+
+    async captureReferenceImage() {
+      const previousVisibility = gridHelper.visible;
+      gridHelper.visible = false;
+      controls.update();
+      renderer.render(scene, camera);
+
+      const snapshot = renderer.domElement.toDataURL("image/png");
+
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          gridHelper.visible = previousVisibility;
+          resolve();
+        });
+      });
+
+      return snapshot;
     },
   };
 }

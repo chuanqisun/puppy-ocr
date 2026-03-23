@@ -176,21 +176,17 @@ function humanizeValue(value: string): string {
 }
 
 function buildRenderPrompt(currentConfig: OrganismConfig): string {
-  return [
-    "A highly detailed scientific specimen portrait of an alien lifeform",
-    `with a ${humanizeValue(currentConfig.body_plan)} body plan`,
-    `${humanizeValue(currentConfig.silhouette_type)} silhouette`,
-    `${humanizeValue(currentConfig.core_shape)} core shape`,
-    `${humanizeValue(currentConfig.core_surface_form)} surface`,
-    `${humanizeValue(currentConfig.appendage_length_type)} ${humanizeValue(currentConfig.appendage_family)}`,
-    `${humanizeValue(currentConfig.appendage_motion_impression)} motion`,
-    `${humanizeValue(currentConfig.segmentation_type)} segmentation`,
-    `${humanizeValue(currentConfig.branching_type)} branching`,
-    `${humanizeValue(currentConfig.outline_profile)} outline`,
-    `${humanizeValue(currentConfig.focal_feature)} focal feature`,
-    `${humanizeValue(currentConfig.membrane_type)} membrane`,
-    "centered composition, clean background, studio lighting, ultra detailed biology illustration",
-  ].join(", ");
+  const promptParts = [
+    "Edit the provided reference image into a polished alien specimen illustration",
+    "preserve the existing anatomy and composition from the reference render",
+    `use a ${humanizeValue(currentConfig.aesthetic_mode)} presentation`,
+    `apply a ${humanizeValue(currentConfig.palette_type)} palette`,
+    `render the materials with a ${humanizeValue(currentConfig.texture_type)} texture`,
+    "set the background to pure black",
+    "refine lighting and fine biological detail while keeping the subject centered and clearly readable",
+  ];
+
+  return promptParts.join(", ");
 }
 
 async function renderImage() {
@@ -202,10 +198,19 @@ async function renderImage() {
 
   try {
     const prompt = buildRenderPrompt(config);
+    const referenceImage = await renderer.captureReferenceImage();
     const url = new URL("/api/generate", apiBaseUrl);
-    url.searchParams.set("prompt", prompt);
 
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt,
+        referenceImage,
+      }),
+    });
     if (!response.ok) {
       throw new Error(`Image API failed with status ${response.status}`);
     }
