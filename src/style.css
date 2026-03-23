@@ -1,2 +1,248 @@
+/* === CSS Variables === */
 :root {
+  --bg: #0a0a0f;
+  --bg-panel: #111118;
+  --bg-input: #1a1a24;
+  --fg: #d0d0d8;
+  --fg-dim: #707080;
+  --fg-bright: #f0f0f8;
+  --accent: #7b6fff;
+  --accent-dim: #5548b0;
+  --border: #2a2a38;
+  --font-mono: "SF Mono", "Fira Code", "Consolas", "Menlo", monospace;
+  --font-size: 12px;
+  --radius: 3px;
+  --gap: 8px;
+  --panel-width: 280px;
+}
+
+/* === Global Styles === */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--fg);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+  outline: none;
+  width: 100%;
+  cursor: pointer;
+}
+
+select:focus {
+  border-color: var(--accent);
+}
+
+label {
+  color: var(--fg-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* === Layout === */
+#app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+.panel {
+  width: var(--panel-width);
+  min-width: var(--panel-width);
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-header {
+  padding: var(--gap) 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+}
+
+.panel-header h1 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-bright);
+  letter-spacing: 0.5px;
+}
+
+.panel-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--gap) 12px;
+}
+
+.panel-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.panel-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.panel-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+/* === Parameter Groups === */
+.param-group {
+  margin-bottom: 12px;
+}
+
+.param-group-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--accent);
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.param-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+/* === Viewport === */
+.viewport {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.viewport canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* === Toolbar === */
+.toolbar {
+  padding: var(--gap) 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.toolbar button {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  color: var(--fg);
+  font-size: 11px;
+  transition: all 0.15s ease;
+}
+
+.toolbar button:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--fg-bright);
+}
+
+.toolbar button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.toolbar button.primary:hover {
+  background: var(--accent-dim);
+}
+
+/* === Status Bar === */
+.status-bar {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  font-size: 10px;
+  color: var(--fg-dim);
+  pointer-events: none;
+}
+
+/* === AI Placeholder Badge === */
+.ai-badge {
+  display: inline-block;
+  font-size: 9px;
+  color: var(--fg-dim);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* === Utility Classes === */
+.hidden {
+  display: none !important;
+}
+
+.seed-input {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--fg);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+  width: 80px;
+  outline: none;
+}
+
+.seed-input:focus {
+  border-color: var(--accent);
+}
+
+.seed-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.seed-row label {
+  flex-shrink: 0;
 }
