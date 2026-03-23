@@ -8,7 +8,8 @@ import "./style.css";
 // --- State ---
 let config: OrganismConfig = createDefaultConfig();
 const renderer = createRenderer();
-const apiBaseUrl = "http://localhost:3001";
+const defaultWorkerApiBaseUrl = "http://localhost:8787";
+const apiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL || defaultWorkerApiBaseUrl).trim();
 const apiKeyStorageKey = "life-config.replicate-api-key";
 let statusMessage = "";
 let isRendering = false;

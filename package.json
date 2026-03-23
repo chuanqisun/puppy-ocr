@@ -7,7 +7,11 @@
     "dev": "concurrently npm:dev:*",
     "dev:web": "vite",
     "dev:api": "node --watch server/index.mjs",
+    "dev:worker": "npm --prefix worker run dev",
     "api": "node server/index.mjs",
+    "worker": "npm --prefix worker run dev",
+    "worker:deploy": "npm --prefix worker run deploy",
+    "worker:test": "npm --prefix worker run test",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
@@ -22,5 +26,8 @@
     "express": "^5.2.1",
     "replicate": "^1.1.0",
     "three": "^0.183.2"
-  }
+  },
+  "workspaces": [
+    "worker"
+  ]
 }
