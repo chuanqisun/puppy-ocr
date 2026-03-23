@@ -183,8 +183,8 @@ function loadConfig() {
       try {
         config = configFromJSON(reader.result as string);
         rebuildAndRegenerate();
-      } catch {
-        console.error("Invalid config file");
+      } catch (e) {
+        console.error("Failed to load config file:", e instanceof Error ? e.message : e);
       }
     };
     reader.readAsText(file);

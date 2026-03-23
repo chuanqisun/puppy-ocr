@@ -75,7 +75,7 @@ export function generateOrganism(config: OrganismConfig): OrganismGeometry {
   unit.add(focal);
 
   // 8. Apply symmetry
-  const organism = applySymmetry(unit, config.symmetry_type ?? "none");
+  const organism = applySymmetry(unit, config.symmetry_type ?? "none", rng);
   organism.name = "organism";
 
   return { group: organism };

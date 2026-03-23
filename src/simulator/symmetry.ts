@@ -2,10 +2,12 @@
  * Symmetry transforms — duplicate and mirror/rotate geometry
  */
 import * as THREE from "three";
+import type { RNG } from "./rng.ts";
 
 export function applySymmetry(
   group: THREE.Group,
-  type: string
+  type: string,
+  rng: RNG
 ): THREE.Group {
   const result = new THREE.Group();
 
@@ -35,8 +37,8 @@ export function applySymmetry(
       const approxMirror = group.clone();
       // Slight offset for "approximate" symmetry
       approxMirror.scale.x = -1;
-      approxMirror.scale.y = 1 + (Math.random() - 0.5) * 0.05;
-      approxMirror.position.y += (Math.random() - 0.5) * 0.05;
+      approxMirror.scale.y = 1 + (rng() - 0.5) * 0.05;
+      approxMirror.position.y += (rng() - 0.5) * 0.05;
       result.add(approxMirror);
       break;
     }
