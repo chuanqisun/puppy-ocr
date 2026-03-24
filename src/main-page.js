@@ -1,11 +1,13 @@
 import { clear as idbClear, get as idbGet, set as idbSet } from "idb-keyval";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { images as demoImages } from "./assets/assets.js";
 import { buildRenderCacheKey, RenderQueue } from "./render-queue.js";
 import { playMorphSfx, playRevealSfx, primeSfx, stopAllSfx } from "./sfx.js";
 
 const imageApiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL ?? window.location.origin).trim();
 const captureRequested = new URLSearchParams(window.location.search).get("capture") === "true";
+const publicBaseUrl = new URL(import.meta.env.BASE_URL, window.location.origin);
 
 // Clear idb-keyval cache on app start
 idbClear();
@@ -143,6 +145,8 @@ let forwardedOverlayPointerId = null;
 let captureDirectoryHandle = null;
 let captureInitializationPromise = null;
 let captureWriteQueue = Promise.resolve();
+let demoAssetOrder = shuffleArray(demoImages.map((_, index) => index));
+let demoAssetCursor = 0;
 
 const renderQueue = new RenderQueue({
   concurrency: 3,
@@ -186,6 +190,130 @@ function cloneQuaternion(quaternion) {
   return { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w };
 }
 
+function shuffleArray(values) {
+  const shuffled = [...values];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const nextIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[nextIndex]] = [shuffled[nextIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
+function cloneCameraStateValue(cameraState) {
+  return {
+    position: { ...cameraState.position },
+    target: { ...cameraState.target },
+    quaternion: { ...cameraState.quaternion },
+  };
+}
+
+function serializeCaptureRecord({ dna, rotation = null, camera = null, style = null }) {
+  return JSON.stringify({
+    dna: roundCaptureDNA(dna),
+    rotation: rotation
+      ? {
+          x: roundCaptureValue(rotation.x),
+          y: roundCaptureValue(rotation.y),
+        }
+      : null,
+    camera: camera
+      ? {
+          position: {
+            x: roundCaptureValue(camera.position.x),
+            y: roundCaptureValue(camera.position.y),
+            z: roundCaptureValue(camera.position.z),
+          },
+          target: {
+            x: roundCaptureValue(camera.target.x),
+            y: roundCaptureValue(camera.target.y),
+            z: roundCaptureValue(camera.target.z),
+          },
+          quaternion: {
+            x: roundCaptureValue(camera.quaternion.x),
+            y: roundCaptureValue(camera.quaternion.y),
+            z: roundCaptureValue(camera.quaternion.z),
+            w: roundCaptureValue(camera.quaternion.w),
+          },
+        }
+      : null,
+    ...(style ? { style: normalizeRenderStyle(style) } : {}),
+  });
+}
+
+function getDemoAssetStyle(asset) {
+  return normalizeRenderStyle(asset?.style ?? "mineral");
+}
+
+function getDemoAssetHashInput(asset) {
+  return serializeCaptureRecord({
+    dna: asset.dna,
+    rotation: asset.rotation,
+    camera: asset.camera,
+    style: getDemoAssetStyle(asset),
+  });
+}
+
+function getNextDemoAsset() {
+  if (!demoImages.length) return null;
+
+  if (demoAssetCursor >= demoAssetOrder.length) {
+    demoAssetOrder = shuffleArray(demoImages.map((_, index) => index));
+    demoAssetCursor = 0;
+  }
+
+  return demoImages[demoAssetOrder[demoAssetCursor++]];
+}
+
+function getDemoOutputUrl(hash) {
+  return new URL(`output/${hash}.webp`, publicBaseUrl).toString();
+}
+
+function shouldUseLocalDemoAssets() {
+  return mutateOn && !captureRequested;
+}
+
+function applyCameraState(cameraState) {
+  if (!cameraState) return;
+
+  camera.position.set(cameraState.position.x, cameraState.position.y, cameraState.position.z);
+  camera.quaternion.set(cameraState.quaternion.x, cameraState.quaternion.y, cameraState.quaternion.z, cameraState.quaternion.w);
+  controls.target.set(cameraState.target.x, cameraState.target.y, cameraState.target.z);
+  camera.updateMatrixWorld();
+  controls.update();
+}
+
+function preloadImageUrl(imageUrl, signal) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const cleanup = () => {
+      image.onload = null;
+      image.onerror = null;
+      signal?.removeEventListener("abort", handleAbort);
+    };
+    const handleAbort = () => {
+      cleanup();
+      reject(new DOMException("Image preload aborted", "AbortError"));
+    };
+
+    image.onload = () => {
+      cleanup();
+      resolve(imageUrl);
+    };
+    image.onerror = () => {
+      cleanup();
+      reject(new Error(`Missing demo image: ${imageUrl}`));
+    };
+
+    if (signal?.aborted) {
+      handleAbort();
+      return;
+    }
+
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    image.src = imageUrl;
+  });
+}
+
 function roundCaptureValue(value) {
   return Number(value.toFixed(3));
 }
@@ -227,16 +355,14 @@ function getCameraState() {
 }
 
 function buildCaptureRecord(state) {
-  return {
-    dna: roundCaptureDNA(state.to),
-    rotation: state.revealRotation
-      ? {
-          x: roundCaptureValue(state.revealRotation.x),
-          y: roundCaptureValue(state.revealRotation.y),
-        }
-      : null,
-    camera: state.camera,
-  };
+  return JSON.parse(
+    serializeCaptureRecord({
+      dna: state.to,
+      rotation: state.revealRotation,
+      camera: state.camera,
+      style: state.renderStyle,
+    })
+  );
 }
 
 async function computeCaptureHash(input) {
@@ -285,9 +411,9 @@ async function appendTextFile(directoryHandle, fileName, content) {
 async function saveCapturedSnapshot(state, imageUrl) {
   if (!captureRequested || !captureDirectoryHandle || !imageUrl || state.captureSaved) return;
 
-  const hash = await computeCaptureHash(state.renderCacheKeyValue);
-  const imageFile = `${hash}.png`;
   const record = buildCaptureRecord(state);
+  const hash = await computeCaptureHash(JSON.stringify(record));
+  const imageFile = `${hash}.png`;
   const imageBlob = await dataUrlToPngBlob(imageUrl);
   const imageFileHandle = await captureDirectoryHandle.getFileHandle(imageFile, { create: true });
   const imageWritable = await imageFileHandle.createWritable();
@@ -357,6 +483,13 @@ function createRenderTask(dna, rotation, style = renderStyle) {
     const apiKey = getStoredApiKey();
     if (!apiKey) return referenceImage;
     return requestGeneratedImage(referenceImage, style, signal);
+  };
+}
+
+function createDemoAssetTask(state) {
+  return async (signal) => {
+    const hash = await computeCaptureHash(state.demoAssetHashInput);
+    return preloadImageUrl(getDemoOutputUrl(hash), signal);
   };
 }
 
@@ -659,6 +792,8 @@ function beginQueuedMutation(now = performance.now(), options = {}) {
 
   mutationState = nextState;
   renderStyle = normalizeRenderStyle(mutationState.renderStyle);
+  applyGroupRotation(world, mutationState.revealRotation);
+  applyCameraState(mutationState.camera);
   mutationState.phase = "interp";
   mutationState.phaseStart = now;
   mutationState.shouldLoop = shouldLoop;
@@ -832,6 +967,37 @@ function getQueueSeed(now) {
 }
 
 function queueFutureMutation(now, options = {}) {
+  if (shouldUseLocalDemoAssets()) {
+    const seed = getQueueSeed(now);
+    const asset = getNextDemoAsset();
+    if (!asset) return;
+
+    const normalizedRenderStyle = getDemoAssetStyle(asset);
+    const revealRotation = asset.rotation ? { x: asset.rotation.x, y: asset.rotation.y } : getCurrentWorldRotation();
+    const queuedState = {
+      phase: "queued",
+      phaseStart: 0,
+      plannedStart: seed.plannedStart,
+      from: seed.from,
+      to: cloneDNAState(asset.dna),
+      renderStyle: normalizedRenderStyle,
+      revealRotation,
+      imageUrl: null,
+      imageSettled: false,
+      shouldPrepareImage: true,
+      renderCacheKey: null,
+      renderCacheKeyValue: `demo:${getDemoAssetHashInput(asset)}`,
+      camera: cloneCameraStateValue(asset.camera ?? getCameraState()),
+      captureQueued: false,
+      captureSaved: false,
+      demoAssetHashInput: getDemoAssetHashInput(asset),
+    };
+
+    futureMutationQueue.push(queuedState);
+    prepareBufferedMutationAssets(queuedState);
+    return;
+  }
+
   const { prepareImage = mutateOn, style = mutateOn ? getRandomRenderStyle() : renderStyle } = options;
   const seed = getQueueSeed(now);
   const target = randomMutationTarget(APP.dna.ranges);
@@ -915,9 +1081,10 @@ async function prepareBufferedMutationAssets(state) {
 
   const key = state.renderCacheKeyValue;
   state.renderCacheKey = key;
+  const task = state.demoAssetHashInput ? createDemoAssetTask(state) : createRenderTask(state.to, state.revealRotation, state.renderStyle);
 
   renderQueue
-    .enqueue(key, createRenderTask(state.to, state.revealRotation, state.renderStyle))
+    .enqueue(key, task)
     .then((imageUrl) => {
       if (mutationState !== state && !futureMutationQueue.includes(state)) {
         if (imageUrl?.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
