@@ -98,6 +98,7 @@ fillLight.position.set(-5, -2, 4);
 scene.add(fillLight);
 
 const RENDER_MODE_SEQUENCE = ["point", "mesh", "solid"];
+const RENDER_STYLE_SEQUENCE = ["organ", "flora", "liquid", "ribbon", "mineral"];
 const APP_MODE_SEQUENCE = ["manual", "preview", "demo"];
 const SPACE_HOLD_DELAY_MS = 180;
 const LIVE_PREVIEW_REFRESH_DELAY_MS = 500;
@@ -160,9 +161,9 @@ const renderQueue = new RenderQueue({
   },
 });
 
-function getRenderCacheKey(dna, rotation) {
+function getRenderCacheKey(dna, rotation, style = renderStyle) {
   return buildRenderCacheKey({
-    style: renderStyle,
+    style,
     source: getStoredApiKey() ? "ai" : "reference",
     dna,
     rotation,
@@ -173,12 +174,12 @@ function getRenderCacheKey(dna, rotation) {
   });
 }
 
-function createRenderTask(dna, rotation) {
+function createRenderTask(dna, rotation, style = renderStyle) {
   return async (signal) => {
     const referenceImage = await captureReferenceImageForDNA(dna, rotation, getReferenceRenderModeForAi());
     const apiKey = getStoredApiKey();
     if (!apiKey) return referenceImage;
-    return requestGeneratedImage(referenceImage, dna, signal);
+    return requestGeneratedImage(referenceImage, style, signal);
   };
 }
 
@@ -216,7 +217,9 @@ function setStoredApiKey(value) {
 
 function getStoredRenderStyle() {
   const value = window.localStorage.getItem(APP.api.renderStyleStorageKey);
-  return value === "organ" || value === "flora" || value === "powder" || value === "supernova" || value === "mineral" ? value : "mineral";
+  if (value === "powder") return "liquid";
+  if (value === "supernova") return "ribbon";
+  return value === "organ" || value === "flora" || value === "liquid" || value === "ribbon" || value === "mineral" ? value : "mineral";
 }
 
 function getStoredLivePreview() {
@@ -230,7 +233,7 @@ function getInitialAppMode() {
 }
 
 function setStoredRenderStyle(value) {
-  renderStyle = value === "organ" || value === "flora" || value === "powder" || value === "supernova" || value === "mineral" ? value : "mineral";
+  renderStyle = normalizeRenderStyle(value);
   window.localStorage.setItem(APP.api.renderStyleStorageKey, renderStyle);
 }
 
@@ -478,11 +481,13 @@ function beginQueuedMutation(now = performance.now(), options = {}) {
   if (!nextState) return false;
 
   mutationState = nextState;
+  renderStyle = normalizeRenderStyle(mutationState.renderStyle);
   mutationState.phase = "interp";
   mutationState.phaseStart = now;
   mutationState.shouldLoop = shouldLoop;
 
   if (mutateOn) ensureFutureMutationBuffer(now);
+  syncUI();
   playMorphSfx({
     durationMs: getMutationDurationMs(),
     intensity: getSfxIntensity(mutationState.to),
@@ -643,7 +648,7 @@ function getQueueSeed(now) {
 }
 
 function queueFutureMutation(now, options = {}) {
-  const { prepareImage = mutateOn } = options;
+  const { prepareImage = mutateOn, style = mutateOn ? getRandomRenderStyle() : renderStyle } = options;
   const seed = getQueueSeed(now);
   const target = randomMutationTarget(APP.dna.ranges);
   const queuedState = {
@@ -652,6 +657,7 @@ function queueFutureMutation(now, options = {}) {
     plannedStart: seed.plannedStart,
     from: seed.from,
     to: target,
+    renderStyle: normalizeRenderStyle(style),
     revealRotation: getCurrentWorldRotation(),
     imageUrl: null,
     imageSettled: !prepareImage,
@@ -717,11 +723,11 @@ async function prepareBufferedMutationAssets(state) {
     return;
   }
 
-  const key = getRenderCacheKey(state.to, state.revealRotation);
+  const key = getRenderCacheKey(state.to, state.revealRotation, state.renderStyle);
   state.renderCacheKey = key;
 
   renderQueue
-    .enqueue(key, createRenderTask(state.to, state.revealRotation))
+    .enqueue(key, createRenderTask(state.to, state.revealRotation, state.renderStyle))
     .then((imageUrl) => {
       if (mutationState !== state && !futureMutationQueue.includes(state)) {
         if (imageUrl?.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
@@ -748,7 +754,7 @@ async function prepareBufferedMutationAssets(state) {
     });
 }
 
-async function requestGeneratedImage(referenceImage, dna, signal) {
+async function requestGeneratedImage(referenceImage, style, signal) {
   const response = await fetch(new URL("/api/generate", APP.api.baseUrl), {
     method: "POST",
     headers: {
@@ -757,7 +763,7 @@ async function requestGeneratedImage(referenceImage, dna, signal) {
     },
     signal,
     body: JSON.stringify({
-      prompt: buildRenderPrompt(),
+      prompt: buildRenderPrompt(style),
       referenceImage,
     }),
   });
@@ -1167,7 +1173,7 @@ function pickMineralColorStyle() {
   return mineralColorStyles[Math.floor(Math.random() * mineralColorStyles.length)];
 }
 
-function buildRenderPrompt() {
+function buildRenderPrompt(style = renderStyle) {
   const mineralColorStyle = pickMineralColorStyle();
   const organPrompt = [
     "Colorize the provided image using Visceral bio-organic body horror, organ-like fleshy textures, sinewy muscle fibers, exposed tissue, veiny membranes, wet glossy surface, translucent skin, grotesque organic folds, tumorous growths, raw anatomical forms",
@@ -1189,16 +1195,24 @@ function buildRenderPrompt() {
     "Keep the shape unchanged and use a pure black background",
   ].join(", ");
 
-  const supernovaPrompt = [
+  const ribbonPrompt = [
     "Colorize the provided image as a biomorphic sculpture with fluid organic form, folded ribbon aesthetic, continuous flowing surfaces, smooth anatomical curvature, layered folds, tensile membrane-like contours, sculpted creases, subtle material depth, elegant museum-scale object design, map the existing shape directly to the folded ribbon structure and organic surface articulation, extreme macro realism",
     "Keep the shape unchanged and use a pure black background",
   ].join(", ");
 
-  if (renderStyle === "organ") return organPrompt;
-  if (renderStyle === "flora") return floraPrompt;
-  if (renderStyle === "powder") return waterSplashPrompt;
-  if (renderStyle === "supernova") return supernovaPrompt;
+  if (style === "organ") return organPrompt;
+  if (style === "flora") return floraPrompt;
+  if (style === "liquid") return waterSplashPrompt;
+  if (style === "ribbon") return ribbonPrompt;
   return mineralPrompt;
+}
+
+function normalizeRenderStyle(value) {
+  return RENDER_STYLE_SEQUENCE.includes(value) ? value : "mineral";
+}
+
+function getRandomRenderStyle() {
+  return RENDER_STYLE_SEQUENCE[Math.floor(Math.random() * RENDER_STYLE_SEQUENCE.length)];
 }
 
 function getSfxIntensity(dna) {
