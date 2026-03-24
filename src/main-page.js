@@ -81,6 +81,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.enablePan = false;
 controls.mouseButtons.RIGHT = null;
+renderer.domElement.removeEventListener("contextmenu", controls._onContextMenu);
 
 const ambient = new THREE.AmbientLight(0xffffff, 0.8);
 scene.add(ambient);
@@ -116,6 +117,61 @@ let keyboardHoldActive = false;
 let holdOverlayToken = 0;
 let lastPointerButton = null;
 let autoRotationEnabled = true;
+
+function roundForCacheKey(value, precision = 4) {
+  return Number(value.toFixed(precision));
+}
+
+function buildHeldRenderCacheKey(dna, rotation, style = renderStyle) {
+  return JSON.stringify({
+    style,
+    dna: {
+      order: roundForCacheKey(dna.order),
+      warp: roundForCacheKey(dna.warp),
+      fold: roundForCacheKey(dna.fold),
+      spike: roundForCacheKey(dna.spike),
+      chaos: roundForCacheKey(dna.chaos),
+      layers: dna.layers,
+    },
+    rotation: {
+      x: roundForCacheKey(rotation.x),
+      y: roundForCacheKey(rotation.y),
+    },
+  });
+}
+
+function getHeldRenderCache(key) {
+  try {
+    const cached = window.sessionStorage.getItem(key);
+    return cached && cached.trim() ? cached : null;
+  } catch {
+    return null;
+  }
+}
+
+function setHeldRenderCache(key, imageUrl) {
+  if (!imageUrl) return;
+
+  try {
+    window.sessionStorage.setItem(key, imageUrl);
+  } catch (error) {
+    console.warn("Unable to cache held render result:", error);
+  }
+}
+
+async function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Unable to encode generated image"));
+    };
+    reader.onerror = () => {
+      reject(reader.error ?? new Error("Unable to read generated image blob"));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
 
 function getSfxIntensity(dna) {
   return Math.min(1.8, Math.max(0.75, 0.85 + dna.fold * 0.22 + dna.spike * 0.9 + dna.chaos * 0.35));
@@ -611,7 +667,7 @@ async function requestGeneratedImage(referenceImage, dna) {
   }
 
   const blob = await response.blob();
-  return URL.createObjectURL(blob);
+  return blobToDataUrl(blob);
 }
 
 async function captureReferenceImageForDNA(dna, rotation) {
@@ -656,8 +712,14 @@ async function captureReferenceImageForDNA(dna, rotation) {
 }
 
 async function requestOverlayForState(dna, rotation) {
+  const cacheKey = buildHeldRenderCacheKey(dna, rotation);
+  const cachedImage = getHeldRenderCache(cacheKey);
+  if (cachedImage) return cachedImage;
+
   const referenceImage = await captureReferenceImageForDNA(dna, rotation);
-  return getStoredApiKey() ? requestGeneratedImage(referenceImage, dna) : referenceImage;
+  const imageUrl = getStoredApiKey() ? await requestGeneratedImage(referenceImage, dna) : referenceImage;
+  setHeldRenderCache(cacheKey, imageUrl);
+  return imageUrl;
 }
 
 function showSnapshotOverlay(imageUrl, state = null, status = "fading in generated image") {
