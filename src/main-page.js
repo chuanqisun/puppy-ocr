@@ -116,6 +116,7 @@ scene.add(world);
 const dom = {
   apiKey: document.getElementById("apiKey"),
   hideButton: document.getElementById("hideBtn"),
+  randomizeButton: document.getElementById("randomizeBtn"),
   status: document.getElementById("status"),
   snapshotOverlay: document.getElementById("snapshotOverlay"),
   snapshotImage: document.getElementById("snapshotImage"),
@@ -413,8 +414,18 @@ function revokeMutationImageUrl(state) {
   if (state?.imageUrl?.startsWith("blob:")) URL.revokeObjectURL(state.imageUrl);
 }
 
+function abortMutationImageRequest(state) {
+  if (!state?.requestController) return;
+  state.requestController.abort();
+  state.requestController = null;
+}
+
 function clearFutureMutationQueue() {
-  while (futureMutationQueue.length) revokeMutationImageUrl(futureMutationQueue.pop());
+  while (futureMutationQueue.length) {
+    const state = futureMutationQueue.pop();
+    abortMutationImageRequest(state);
+    revokeMutationImageUrl(state);
+  }
 }
 
 function clearKeyboardHoldTimer() {
@@ -510,13 +521,29 @@ function setRenderMode(mode) {
   buildMorphology();
 }
 
-function beginQueuedMutation(now = performance.now(), options = {}) {
-  const { shouldLoop = mutateOn } = options;
+function triggerSingleMutationTransition() {
+  if (mutateOn) stopMutationMode();
+  const shouldUseLivePreview = livePreviewEnabled;
+  appMode = shouldUseLivePreview ? "preview" : "manual";
+  releaseHoldOverlay();
+  clearFutureMutationQueue();
+  if (shouldUseLivePreview) suspendLivePreview("animating to buffered target");
+  beginQueuedMutation(performance.now(), {
+    shouldLoop: false,
+    prepareImage: shouldUseLivePreview,
+    lockRotation: shouldUseLivePreview,
+  });
+  syncUI();
+}
 
+function beginQueuedMutation(now = performance.now(), options = {}) {
+  const { shouldLoop = mutateOn, prepareImage = shouldLoop, lockRotation = false } = options;
+
+  abortMutationImageRequest(mutationState);
   if (mutationState?.imageUrl) revokeMutationImageUrl(mutationState);
   mutationState = null;
 
-  if (!futureMutationQueue.length) queueFutureMutation(now, { prepareImage: shouldLoop });
+  if (!futureMutationQueue.length) queueFutureMutation(now, { prepareImage, lockRotation });
   else if (mutateOn) ensureFutureMutationBuffer(now);
 
   const nextState = futureMutationQueue.shift();
@@ -548,6 +575,7 @@ function continueAfterHeldMutation(now = performance.now()) {
     const shouldLoop = mutationState.shouldLoop;
     mutationState = null;
     if (shouldLoop) startMutationCycle(now);
+    else if (livePreviewEnabled) refreshLivePreview({ status: "capturing live preview" });
     else setStatusMessage("loaded next parameter set");
     return;
   }
@@ -694,12 +722,13 @@ function getQueueSeed(now) {
 }
 
 function queueFutureMutation(now, options = {}) {
-  const { prepareImage = mutateOn } = options;
+  const { prepareImage = mutateOn, lockRotation = false } = options;
   const seed = getQueueSeed(now);
   const target = randomMutationTarget(APP.dna.ranges);
-  const fromRotation = getRotationForTimestamp(seed.plannedStart);
-  const toRotation = getRotationForTimestamp(seed.plannedStart + getMutationDurationMs());
-  const holdRotation = getRotationForTimestamp(seed.plannedStart + getMutationRevealDelayMs());
+  const lockedRotation = lockRotation ? getCurrentWorldRotation() : null;
+  const fromRotation = lockedRotation ?? getRotationForTimestamp(seed.plannedStart);
+  const toRotation = lockedRotation ?? getRotationForTimestamp(seed.plannedStart + getMutationDurationMs());
+  const holdRotation = lockedRotation ?? getRotationForTimestamp(seed.plannedStart + getMutationRevealDelayMs());
   const queuedState = {
     phase: "queued",
     phaseStart: 0,
@@ -784,16 +813,20 @@ async function prepareBufferedMutationAssets(state) {
     const apiKey = getStoredApiKey();
     const referenceImage = await captureReferenceImageForDNA(state.to, state.revealRotation, getReferenceRenderModeForAi());
 
-    if (!mutateOn) return;
+    if (mutationState !== state && !futureMutationQueue.includes(state)) return;
 
-    const imagePromise = apiKey ? requestGeneratedImage(referenceImage, state.to) : Promise.resolve(null);
+    const requestController = apiKey ? new AbortController() : null;
+    state.requestController = requestController;
+
+    const imagePromise = apiKey ? requestGeneratedImage(referenceImage, state.to, requestController.signal) : Promise.resolve(null);
 
     imagePromise
       .then((imageUrl) => {
-        if (!mutateOn) {
+        if (mutationState !== state && !futureMutationQueue.includes(state)) {
           if (imageUrl?.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
           return;
         }
+        state.requestController = null;
         state.imageUrl = imageUrl;
         state.imageSettled = true;
         if (state.phase === "awaitingImage") {
@@ -801,7 +834,12 @@ async function prepareBufferedMutationAssets(state) {
         }
       })
       .catch((error) => {
-        if (!mutateOn) return;
+        state.requestController = null;
+        if (mutationState !== state && !futureMutationQueue.includes(state)) return;
+        if (error instanceof DOMException && error.name === "AbortError") {
+          state.imageSettled = true;
+          return;
+        }
         state.imageSettled = true;
         console.error("Image request failed:", error);
         setStatusMessage(error instanceof Error ? error.message : "image request failed");
@@ -812,20 +850,22 @@ async function prepareBufferedMutationAssets(state) {
         }
       });
   } catch (error) {
-    if (!mutateOn) return;
+    if (mutationState !== state && !futureMutationQueue.includes(state)) return;
+    state.requestController = null;
     console.error("Snapshot capture failed:", error);
     state.imageSettled = true;
     setStatusMessage(error instanceof Error ? error.message : "snapshot capture failed");
   }
 }
 
-async function requestGeneratedImage(referenceImage, dna) {
+async function requestGeneratedImage(referenceImage, dna, signal) {
   const response = await fetch(new URL("/api/generate", APP.api.baseUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-api-key": getStoredApiKey(),
     },
+    signal,
     body: JSON.stringify({
       prompt: buildRenderPrompt(),
       referenceImage,
@@ -926,10 +966,11 @@ function clearSnapshotOverlayAndContinue(state) {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       overlay.classList.remove("no-transition");
-      if (!mutateOn || mutationState !== state || state.phase !== "overlayClearing") return;
+      if (mutationState !== state || state.phase !== "overlayClearing") return;
       const shouldLoop = state.shouldLoop;
       mutationState = null;
       if (shouldLoop) startMutationCycle(performance.now());
+      else if (livePreviewEnabled) refreshLivePreview({ status: "capturing live preview" });
       else setStatusMessage("loaded next parameter set");
     });
   });
@@ -1124,6 +1165,10 @@ dom.hideButton.addEventListener("click", () => {
   syncUI();
 });
 
+dom.randomizeButton.addEventListener("click", () => {
+  triggerSingleMutationTransition();
+});
+
 dom.snapshotImage.draggable = false;
 dom.snapshotImage.addEventListener("dragstart", (event) => {
   event.preventDefault();
@@ -1169,12 +1214,7 @@ addEventListener("keydown", (event) => {
 
   if (event.key === "Enter") {
     event.preventDefault();
-    if (mutateOn) stopMutationMode();
-    appMode = "manual";
-    releaseHoldOverlay();
-    if (livePreviewEnabled) suspendLivePreview("animating to buffered target");
-    beginQueuedMutation(performance.now(), { shouldLoop: false });
-    syncUI();
+    triggerSingleMutationTransition();
     return;
   }
 

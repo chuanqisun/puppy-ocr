@@ -156,6 +156,30 @@ label {
   margin-bottom: 12px;
 }
 
+.panel-action-button {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 7px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg-bright);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.panel-action-button:hover,
+.panel-action-button:focus-visible {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.panel-action-button:focus-visible {
+  outline: none;
+}
+
 /* === Viewport === */
 .viewport {
   flex: 1;
