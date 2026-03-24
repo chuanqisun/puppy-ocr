@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Folding Surface DNA</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+        color: #fff;
+        font-family: Inter, system-ui, sans-serif;
+      }
+      canvas {
+        display: block;
+      }
+
+      .mesh-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.08;
+        background-image: linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+        background-size: 32px 32px;
+        -webkit-mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0.12) 72%, transparent 100%);
+        mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0.12) 72%, transparent 100%);
+      }
+
+      .ui-shell {
+        position: fixed;
+        top: 14px;
+        left: 14px;
+        z-index: 10;
+      }
+
+      .ui {
+        width: 260px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 14px;
+        padding: 12px;
+        backdrop-filter: blur(10px);
+        transition: opacity 180ms ease, transform 180ms ease;
+      }
+
+      .ui-shell.collapsed .ui {
+        opacity: 0;
+        transform: translateX(0);
+        pointer-events: none;
+      }
+
+      .ui-shell.collapsed:hover .ui {
+        opacity: 1;
+        transform: translateX(0);
+        pointer-events: auto;
+      }
+
+      .title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 6px;
+      }
+
+      .title {
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      .hide-btn {
+        flex: 0 0 auto;
+        width: auto;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.8);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 8px;
+        padding: 4px 8px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+
+      .control {
+        margin: 10px 0;
+      }
+      .control-head {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        margin-bottom: 4px;
+      }
+
+      .render-mode-group {
+        margin: 10px 0;
+        font-size: 11px;
+      }
+
+      .render-mode-title {
+        margin-bottom: 6px;
+        display: block;
+      }
+
+      .radio-row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .radio-row label {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        cursor: pointer;
+      }
+
+      input[type="range"] {
+        width: 100%;
+        appearance: none;
+        height: 2px;
+        background: rgba(255, 255, 255, 0.18);
+        outline: none;
+      }
+
+      input[type="range"]::-webkit-slider-thumb {
+        appearance: none;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: none;
+        background: #fff;
+        cursor: pointer;
+      }
+
+      input[type="checkbox"],
+      input[type="radio"] {
+        cursor: pointer;
+      }
+
+      .buttons {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      button {
+        flex: 1;
+        padding: 9px 10px;
+        border-radius: 10px;
+        border: none;
+        background: #fff;
+        color: #000;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      button.alt {
+        background: transparent;
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+      }
+
+      .buttons .hide-btn {
+        flex: 0 0 auto;
+        padding: 4px 8px;
+        font-size: 11px;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.8);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+      }
+
+      .api-key-row {
+        margin: 10px 0 6px;
+      }
+
+      .api-key-row label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 11px;
+      }
+
+      .api-key-input {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        background: rgba(255, 255, 255, 0.06);
+        color: #fff;
+        font-size: 12px;
+      }
+
+      .status {
+        margin-top: 10px;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.62);
+        min-height: 1.2em;
+      }
+
+      .snapshot-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 6;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 140ms ease;
+        background: rgba(0, 0, 0, 0.18);
+      }
+
+      .snapshot-overlay.visible {
+        opacity: 1;
+      }
+
+      .snapshot-overlay img {
+        width: min(72vw, 72vh);
+        height: min(72vw, 72vh);
+        object-fit: contain;
+        border-radius: 18px;
+        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
+        background: rgba(255, 255, 255, 0.02);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="mesh-bg"></div>
+
+    <div id="snapshotOverlay" class="snapshot-overlay">
+      <img id="snapshotImage" alt="AI generated morphology preview" />
+    </div>
+
+    <div id="uiShell" class="ui-shell">
+      <div class="ui">
+        <div class="title-row">
+          <div class="title">Surface DNA</div>
+          <button id="hideBtn" class="hide-btn">Hide</button>
+        </div>
+
+        <div class="api-key-row">
+          <label for="apiKey">API Key</label>
+          <input id="apiKey" class="api-key-input" type="password" placeholder="Enter Replicate API key" autocomplete="off" spellcheck="false" />
+        </div>
+
+        <div class="control">
+          <div class="control-head"><span>Symmetry Order</span><span id="orderVal">6.00</span></div>
+          <input id="order" type="range" min="1" max="8" step="0.01" value="6.00" />
+        </div>
+
+        <div class="control">
+          <div class="control-head"><span>Warp</span><span id="warpVal">1.20</span></div>
+          <input id="warp" type="range" min="0" max="3" step="0.01" value="1.20" />
+        </div>
+
+        <div class="control">
+          <div class="control-head"><span>Fold</span><span id="foldVal">0.68</span></div>
+          <input id="fold" type="range" min="0" max="1.6" step="0.01" value="0.68" />
+        </div>
+
+        <div class="control">
+          <div class="control-head"><span>Spike</span><span id="spikeVal">0.00</span></div>
+          <input id="spike" type="range" min="0" max="0.5" step="0.01" value="0.00" />
+        </div>
+
+        <div class="control">
+          <div class="control-head"><span>Symmetry</span><span id="chaosVal">0.22</span></div>
+          <input id="chaos" type="range" min="0" max="1.2" step="0.01" value="0.22" />
+        </div>
+
+        <div class="control">
+          <div class="control-head"><span>Layering</span><span id="layersVal">3</span></div>
+          <input id="layers" type="range" min="1" max="6" step="1" value="3" />
+        </div>
+
+        <div class="control">
+          <div class="control-head"><span>Mesh Opacity</span><span id="meshOpacityVal">0.10</span></div>
+          <input id="meshOpacity" type="range" min="0" max="1" step="0.01" value="0.10" />
+        </div>
+
+        <div class="control">
+          <div class="control-head"><span>Point Opacity</span><span id="pointOpacityVal">0.90</span></div>
+          <input id="pointOpacity" type="range" min="0" max="1" step="0.01" value="0.90" />
+        </div>
+
+        <div class="render-mode-group">
+          <span class="render-mode-title">Render Mode</span>
+          <div class="radio-row">
+            <label><input type="radio" name="renderMode" value="solid" checked /> Solid</label>
+            <label><input type="radio" name="renderMode" value="mesh" /> Mesh</label>
+            <label><input type="radio" name="renderMode" value="points" /> Point Cloud</label>
+          </div>
+        </div>
+
+        <div class="buttons">
+          <button id="mutate">Mutate: Off</button>
+          <button id="seedBtn" class="alt">New Seed</button>
+        </div>
+
+        <div id="status" class="status"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/folding.js"></script>
+
+    <script type="module"></script>
+  </body>
+</html>
