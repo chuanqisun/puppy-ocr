@@ -1,5 +1,17 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   base: "/life-config/",
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        creature: resolve(__dirname, "creature.html"),
+      },
+    },
+  },
 });
