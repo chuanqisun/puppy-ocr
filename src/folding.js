@@ -12,6 +12,9 @@ const APP = {
     overlayFadeInMs: 500,
     overlayHoldMs: 800,
   },
+  mutation: {
+    futureBufferSize: 3,
+  },
   api: {
     baseUrl: imageApiBaseUrl,
     apiKeyStorageKey: "life-config.replicate-api-key",
@@ -85,6 +88,7 @@ const $ = (id) => document.getElementById(id);
 
 let mutateOn = false;
 let mutationState = null;
+const futureMutationQueue = [];
 let renderMode = "solid";
 let menuHidden = false;
 let statusMessage = "";
@@ -175,6 +179,18 @@ function setDNAValues(d) {
   buildMorphology();
 }
 
+function getCurrentWorldRotation() {
+  return { x: world.rotation.x, y: world.rotation.y };
+}
+
+function revokeMutationImageUrl(state) {
+  if (state?.imageUrl?.startsWith("blob:")) URL.revokeObjectURL(state.imageUrl);
+}
+
+function clearFutureMutationQueue() {
+  while (futureMutationQueue.length) revokeMutationImageUrl(futureMutationQueue.pop());
+}
+
 function disposeMaterial(mat) {
   if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
   else mat.dispose();
@@ -239,30 +255,75 @@ function buildMorphology() {
   for (let i = 0; i < d.layers; i++) buildLayer(d, i);
 }
 
-function startMutationCycle(now) {
-  const current = readDNAFromUI();
-  const target = randomMutationTarget(APP.dna.ranges);
+function cloneDNAState(dna) {
+  return {
+    order: dna.order,
+    warp: dna.warp,
+    fold: dna.fold,
+    spike: dna.spike,
+    chaos: dna.chaos,
+    layers: dna.layers,
+  };
+}
 
-  mutationState = {
-    phase: "preparing",
-    phaseStart: now,
-    from: {
-      order: current.order,
-      warp: current.warp,
-      fold: current.fold,
-      spike: current.spike,
-      chaos: current.chaos,
-      layers: current.layers,
-    },
+function getQueueSeed(now) {
+  const lastQueuedState = futureMutationQueue[futureMutationQueue.length - 1];
+  if (lastQueuedState) {
+    return {
+      from: cloneDNAState(lastQueuedState.to),
+      fromRotation: { ...lastQueuedState.toRotation },
+      plannedStart: lastQueuedState.plannedStart + APP.timing.mutationInterpMs,
+    };
+  }
+
+  if (mutationState) {
+    return {
+      from: cloneDNAState(mutationState.to),
+      fromRotation: { ...mutationState.toRotation },
+      plannedStart: mutationState.plannedStart + APP.timing.mutationInterpMs,
+    };
+  }
+
+  return {
+    from: cloneDNAState(readDNAFromUI()),
+    fromRotation: getCurrentWorldRotation(),
+    plannedStart: now,
+  };
+}
+
+function queueFutureMutation(now) {
+  const seed = getQueueSeed(now);
+  const target = randomMutationTarget(APP.dna.ranges);
+  const queuedState = {
+    phase: "queued",
+    phaseStart: 0,
+    plannedStart: seed.plannedStart,
+    from: seed.from,
     to: target,
-    fromRotation: null,
-    toRotation: null,
+    fromRotation: seed.fromRotation,
+    toRotation: getWorldRotationAtTime(seed.plannedStart + APP.timing.mutationInterpMs),
     imageUrl: null,
     imageSettled: false,
     requestToken: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
   };
 
-  prepareMutationSnapshot(mutationState);
+  futureMutationQueue.push(queuedState);
+  prepareBufferedMutationAssets(queuedState);
+}
+
+function ensureFutureMutationBuffer(now = performance.now()) {
+  while (mutateOn && futureMutationQueue.length < APP.mutation.futureBufferSize) queueFutureMutation(now);
+}
+
+function startMutationCycle(now) {
+  ensureFutureMutationBuffer(now);
+  if (!futureMutationQueue.length) return;
+
+  mutationState = futureMutationQueue.shift();
+  mutationState.phase = "interp";
+  mutationState.phaseStart = now;
+  setStatusMessage(getStoredApiKey() ? "animating to buffered target" : "missing api key; animating only");
+  ensureFutureMutationBuffer(now);
 }
 
 function updateMutation(now) {
@@ -274,10 +335,6 @@ function updateMutation(now) {
   }
 
   const elapsed = now - mutationState.phaseStart;
-
-  if (mutationState.phase === "preparing") {
-    return;
-  }
 
   if (mutationState.phase === "interp") {
     const t = Math.min(elapsed / APP.timing.mutationInterpMs, 1);
@@ -292,6 +349,7 @@ function updateMutation(now) {
       if (mutationState.imageUrl) {
         showSnapshotOverlay(mutationState.imageUrl, mutationState);
       } else if (mutationState.imageSettled) {
+        mutationState = null;
         startMutationCycle(now);
       } else {
         mutationState.phase = "awaitingImage";
@@ -314,49 +372,46 @@ function updateMutation(now) {
   }
 }
 
-async function prepareMutationSnapshot(state) {
-  setStatusMessage("capturing target snapshot");
-
+async function prepareBufferedMutationAssets(state) {
   try {
     const apiKey = getStoredApiKey();
-    const interpStart = performance.now();
-    state.fromRotation = { x: world.rotation.x, y: world.rotation.y };
-    state.toRotation = getWorldRotationAtTime(interpStart + APP.timing.mutationInterpMs);
     const referenceImage = await captureReferenceImageForDNA(state.to, state.toRotation);
 
-    if (mutationState !== state || !mutateOn) return;
-
-    setStatusMessage(apiKey ? "requesting generated image" : "animating without image");
+    if (!mutateOn) return;
 
     const imagePromise = apiKey ? requestGeneratedImage(referenceImage, state.to) : Promise.resolve(null);
 
     imagePromise
       .then((imageUrl) => {
-        if (mutationState !== state) return;
+        if (!mutateOn) {
+          if (imageUrl?.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
+          return;
+        }
         state.imageUrl = imageUrl;
         state.imageSettled = true;
         if (state.phase === "awaitingImage") {
-          if (imageUrl) showSnapshotOverlay(imageUrl, state);
-          else startMutationCycle(performance.now());
+          if (imageUrl) {
+            showSnapshotOverlay(imageUrl, state);
+          } else {
+            mutationState = null;
+            startMutationCycle(performance.now());
+          }
         }
       })
       .catch((error) => {
-        if (mutationState !== state) return;
+        if (!mutateOn) return;
         state.imageSettled = true;
         console.error("Image request failed:", error);
         setStatusMessage(error instanceof Error ? error.message : "image request failed");
-        if (state.phase === "awaitingImage") startMutationCycle(performance.now());
+        if (state.phase === "awaitingImage") {
+          mutationState = null;
+          startMutationCycle(performance.now());
+        }
       });
-
-    state.phase = "interp";
-    state.phaseStart = interpStart;
-    setStatusMessage(apiKey ? "animating to next target" : "missing api key; animating only");
   } catch (error) {
-    if (mutationState !== state) return;
+    if (!mutateOn) return;
     console.error("Snapshot capture failed:", error);
     state.imageSettled = true;
-    state.phase = "interp";
-    state.phaseStart = performance.now();
     setStatusMessage(error instanceof Error ? error.message : "snapshot capture failed");
   }
 }
@@ -454,6 +509,7 @@ function clearSnapshotOverlayAndContinue(state) {
     requestAnimationFrame(() => {
       overlay.classList.remove("no-transition");
       if (!mutateOn || mutationState !== state || state.phase !== "overlayClearing") return;
+      mutationState = null;
       startMutationCycle(performance.now());
     });
   });
@@ -475,6 +531,7 @@ function hideSnapshotOverlay(options = {}) {
     if (["order", "warp", "fold", "spike", "chaos"].includes(id) && mutateOn) {
       mutateOn = false;
       mutationState = null;
+      clearFutureMutationQueue();
       hideSnapshotOverlay();
     }
     syncUI();
@@ -504,8 +561,10 @@ $("hideBtn").addEventListener("click", () => {
 $("mutate").addEventListener("click", () => {
   mutateOn = !mutateOn;
   mutationState = null;
+  clearFutureMutationQueue();
   hideSnapshotOverlay();
-  if (!mutateOn) setStatusMessage("");
+  if (mutateOn) ensureFutureMutationBuffer(performance.now());
+  else setStatusMessage("");
   syncUI();
 });
 
@@ -523,7 +582,7 @@ buildMorphology();
 function animate(t) {
   requestAnimationFrame(animate);
   updateMutation(t);
-  if (!mutateOn || !mutationState || mutationState.phase === "preparing") applyWorldRotation(getWorldRotationAtTime(t));
+  if (!mutateOn || !mutationState) applyWorldRotation(getWorldRotationAtTime(t));
   controls.update();
   renderer.render(scene, camera);
 }
