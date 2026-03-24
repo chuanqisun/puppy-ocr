@@ -149,18 +149,18 @@
         masterGain.gain.value = val("vol");
 
         compressor = ctx.createDynamicsCompressor();
-        compressor.threshold.value = -12;
-        compressor.ratio.value = 8;
-        compressor.attack.value = 0.005;
+        compressor.threshold.value = -14;
+        compressor.ratio.value = 10;
+        compressor.attack.value = 0.003;
         compressor.release.value = 0.25;
 
         convolver = ctx.createConvolver();
-        convolver.buffer = makeIR(3.5, 2.0);
+        convolver.buffer = makeIR(4.0, 1.8);
 
         const wet = ctx.createGain();
-        wet.gain.value = 0.18;
+        wet.gain.value = 0.2;
         const dry = ctx.createGain();
-        dry.gain.value = 0.82;
+        dry.gain.value = 0.8;
 
         masterGain.connect(dry).connect(compressor);
         masterGain.connect(convolver).connect(wet).connect(compressor);
@@ -230,41 +230,41 @@
         });
       }
 
-      // ─── REVEAL: massive swelling braaam, no percussion ───
-      // Builds from silence into overwhelming dark presence
-      // Uses slow-opening filter + volume swell + spreading detuned voices
+      // ─── REVEAL: evolved from morph — same DNA but more voices, ───
+      // wider detune, tritone dissonance, deeper sub, filter opens further,
+      // and a slow pitch descent that creates dread gravity
 
       function reveal(at, dur, darkness) {
-        const swellTime = dur + 1.8;
+        const tail = 2.2;
+        const total = dur + tail;
 
         const bus = ctx.createGain();
         bus.connect(masterGain);
 
-        // Slow swell envelope — no sharp attack, just inexorable growth
+        // Swell like the morph but bigger, more sustained
         bus.gain.setValueAtTime(0.0001, at);
-        bus.gain.exponentialRampToValueAtTime(0.15, at + swellTime * 0.2);
-        bus.gain.exponentialRampToValueAtTime(0.85, at + swellTime * 0.6);
-        bus.gain.setValueAtTime(0.85, at + swellTime * 0.75);
-        bus.gain.exponentialRampToValueAtTime(0.0001, at + swellTime);
+        bus.gain.exponentialRampToValueAtTime(0.9, at + total * 0.25);
+        bus.gain.setValueAtTime(0.9, at + total * 0.7);
+        bus.gain.exponentialRampToValueAtTime(0.0001, at + total);
 
-        // Dark lowpass that slowly opens — the "unveiling"
+        // Filter opens wider than morph — reveals more harmonic content
         const lp = ctx.createBiquadFilter();
         lp.type = "lowpass";
-        lp.frequency.setValueAtTime(80, at);
-        lp.frequency.exponentialRampToValueAtTime(400 * darkness, at + swellTime * 0.65);
-        lp.frequency.exponentialRampToValueAtTime(120, at + swellTime);
-        lp.Q.value = 1.0;
+        lp.frequency.setValueAtTime(120, at);
+        lp.frequency.exponentialRampToValueAtTime(900 * darkness, at + total * 0.5);
+        lp.frequency.exponentialRampToValueAtTime(100, at + total);
+        lp.Q.value = 2.0;
         lp.connect(bus);
 
+        // Same root family as morph but dropped an octave
         const f0 = 29.14; // Bb0
 
-        // Voice pairs: each partial has two oscillators detuned against each other
-        // The detune WIDENS over time — sound becomes more massive and unsettling
+        // More voice pairs than morph, wider detune spread
         const partials = [
-          { ratio: 1, vol: 0.3, type: "sawtooth" },
+          { ratio: 1, vol: 0.28, type: "sawtooth" },
           { ratio: 2, vol: 0.18, type: "sawtooth" },
-          { ratio: 3, vol: 0.08, type: "triangle" },
-          { ratio: 4, vol: 0.04, type: "triangle" },
+          { ratio: 3, vol: 0.1, type: "sawtooth" },
+          { ratio: 4, vol: 0.05, type: "triangle" },
         ];
 
         partials.forEach((p, i) => {
@@ -273,47 +273,83 @@
           g.gain.value = p.vol * darkness;
           g.connect(lp);
 
-          // Voice A — starts centered, drifts flat
+          // Wider detune than morph — spreading further over time
           const a = ctx.createOscillator();
           a.type = p.type;
           a.frequency.value = freq;
-          a.detune.setValueAtTime(-2, at);
-          a.detune.linearRampToValueAtTime(-18 - i * 4, at + swellTime * 0.7);
-          a.detune.linearRampToValueAtTime(-8, at + swellTime);
+          a.detune.setValueAtTime(-4, at);
+          a.detune.linearRampToValueAtTime(-25 - i * 5, at + total * 0.65);
+          a.detune.linearRampToValueAtTime(-12, at + total);
 
-          // Voice B — starts centered, drifts sharp
           const b = ctx.createOscillator();
           b.type = p.type;
           b.frequency.value = freq;
-          b.detune.setValueAtTime(2, at);
-          b.detune.linearRampToValueAtTime(18 + i * 4, at + swellTime * 0.7);
-          b.detune.linearRampToValueAtTime(8, at + swellTime);
+          b.detune.setValueAtTime(4, at);
+          b.detune.linearRampToValueAtTime(25 + i * 5, at + total * 0.65);
+          b.detune.linearRampToValueAtTime(12, at + total);
 
           a.connect(g);
           b.connect(g);
           a.start(at);
           b.start(at);
-          a.stop(at + swellTime + 0.1);
-          b.stop(at + swellTime + 0.1);
+          a.stop(at + total + 0.1);
+          b.stop(at + total + 0.1);
         });
 
-        // Sub foundation — clean sine, no filter, just weight
+        // ─── Tritone dissonance layer: E1 against the Bb ───
+        // This is the horror interval — creates deep unease
+        const tritoneF = 41.2; // E1, tritone from Bb
+        const tA = ctx.createOscillator();
+        tA.type = "sawtooth";
+        tA.frequency.value = tritoneF;
+        tA.detune.setValueAtTime(-6, at);
+        tA.detune.linearRampToValueAtTime(-20, at + total * 0.6);
+
+        const tB = ctx.createOscillator();
+        tB.type = "sawtooth";
+        tB.frequency.value = tritoneF;
+        tB.detune.setValueAtTime(6, at);
+        tB.detune.linearRampToValueAtTime(20, at + total * 0.6);
+
+        const tG = ctx.createGain();
+        // Tritone fades in after the main voices establish — creeping horror
+        tG.gain.setValueAtTime(0.0001, at);
+        tG.gain.exponentialRampToValueAtTime(0.0001, at + total * 0.15);
+        tG.gain.exponentialRampToValueAtTime(0.12 * darkness, at + total * 0.5);
+        tG.gain.exponentialRampToValueAtTime(0.0001, at + total);
+        tA.connect(tG);
+        tB.connect(tG);
+        tG.connect(lp);
+        tA.start(at);
+        tB.start(at);
+        tA.stop(at + total + 0.1);
+        tB.stop(at + total + 0.1);
+
+        // ─── Deeper sub than morph — descending pitch for gravity ───
         const sub = ctx.createOscillator();
         sub.type = "sine";
-        sub.frequency.value = f0;
+        sub.frequency.setValueAtTime(f0, at);
+        sub.frequency.exponentialRampToValueAtTime(f0 * 0.85, at + total);
         const subG = ctx.createGain();
         subG.gain.setValueAtTime(0.0001, at);
-        subG.gain.exponentialRampToValueAtTime(0.4 * darkness, at + swellTime * 0.5);
-        subG.gain.exponentialRampToValueAtTime(0.0001, at + swellTime);
-        sub.connect(subG).connect(bus);
+        subG.gain.exponentialRampToValueAtTime(0.45 * darkness, at + total * 0.3);
+        subG.gain.exponentialRampToValueAtTime(0.0001, at + total);
+        sub.connect(subG).connect(bus); // clean sub bypasses filter
         sub.start(at);
-        sub.stop(at + swellTime + 0.1);
+        sub.stop(at + total + 0.1);
 
-        // Slow pitch bend on everything — slight downward drift adds gravity
-        // Achieved by a shared LFO modulating a slight frequency shift
-        // Instead we just bend the sub down slightly
-        sub.frequency.setValueAtTime(f0, at);
-        sub.frequency.exponentialRampToValueAtTime(f0 * 0.94, at + swellTime);
+        // ─── Slow amplitude tremor — same idea as morph but deeper, slower ───
+        // Creates a breathing/pulsing quality like something alive
+        const lfo = ctx.createOscillator();
+        lfo.type = "sine";
+        lfo.frequency.setValueAtTime(0.3, at);
+        lfo.frequency.linearRampToValueAtTime(1.8, at + total * 0.7);
+        lfo.frequency.linearRampToValueAtTime(0.5, at + total);
+        const lfoG = ctx.createGain();
+        lfoG.gain.value = 0.06 * darkness;
+        lfo.connect(lfoG).connect(bus.gain);
+        lfo.start(at);
+        lfo.stop(at + total + 0.1);
       }
 
       // ─── Scheduling ───

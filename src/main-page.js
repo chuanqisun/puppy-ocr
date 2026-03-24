@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { playMorphSfx, playRevealSfx, primeSfx, stopAllSfx } from "./sfx.js";
 
 const imageApiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL ?? window.location.origin).trim();
 const PARAMETER_IDS = ["order", "warp", "fold", "spike", "chaos"];
@@ -9,9 +10,9 @@ const APP = {
   renderer: { clearColor: 0x000000, pixelRatioMax: 2 },
   timing: {
     mutationInterpMs: 2000,
-    mutationHoldMs: 1000,
+    mutationHoldMs: 500,
     overlayFadeInMs: 500,
-    overlayHoldMs: 800,
+    overlayHoldMs: 1000,
   },
   mutation: {
     futureBufferSize: 3,
@@ -71,7 +72,11 @@ renderer.domElement.addEventListener("contextmenu", (event) => {
   event.preventDefault();
 });
 renderer.domElement.addEventListener("pointerdown", (event) => {
+  void primeSfx();
   if (event.pointerType === "mouse") lastPointerButton = event.button;
+});
+window.addEventListener("keydown", () => {
+  void primeSfx();
 });
 document.body.appendChild(renderer.domElement);
 
@@ -112,6 +117,14 @@ let keyboardSpacePressed = false;
 let keyboardHoldActive = false;
 let holdOverlayToken = 0;
 let lastPointerButton = null;
+
+function getSfxIntensity(dna) {
+  return Math.min(1.8, Math.max(0.75, 0.85 + dna.fold * 0.22 + dna.spike * 0.9 + dna.chaos * 0.35));
+}
+
+function getRevealSfxIntensity(dna) {
+  return Math.min(2.1, getSfxIntensity(dna) + 0.35 + dna.fold * 0.12 + dna.chaos * 0.18);
+}
 
 function applyTimingConstants() {
   const root = document.documentElement;
@@ -199,6 +212,7 @@ function stopMutationMode() {
   if (mutationState?.imageUrl) revokeMutationImageUrl(mutationState);
   mutationState = null;
   mutateOn = false;
+  stopAllSfx();
   hideSnapshotOverlay({ immediate: true, status: "" });
 }
 
@@ -209,6 +223,26 @@ function getCurrentRotationTimelineTime(now = performance.now()) {
 
 function getMutationDurationMs() {
   return APP.timing.mutationInterpMs;
+}
+
+function getMutationHoldDurationMs() {
+  return APP.timing.mutationHoldMs;
+}
+
+function getMutationRevealDelayMs() {
+  return getMutationDurationMs() + getMutationHoldDurationMs();
+}
+
+function getMutationCycleDurationMs() {
+  return getMutationRevealDelayMs() + APP.timing.overlayFadeInMs + APP.timing.overlayHoldMs;
+}
+
+function getOverlayFadeInDurationMs() {
+  return APP.timing.overlayFadeInMs;
+}
+
+function getOverlayHoldDurationMs() {
+  return APP.timing.overlayHoldMs;
 }
 
 function getNextRenderMode(mode = renderMode) {
@@ -243,6 +277,10 @@ function endRotationPause(now = performance.now()) {
 
 function getCurrentWorldRotation() {
   return { x: world.rotation.x, y: world.rotation.y };
+}
+
+function getRotationForTimestamp(timeMs) {
+  return getWorldRotationAtTime(getCurrentRotationTimelineTime(timeMs));
 }
 
 function revokeMutationImageUrl(state) {
@@ -353,6 +391,10 @@ function beginQueuedMutation(now = performance.now(), options = {}) {
   mutationState.shouldLoop = shouldLoop;
 
   if (mutateOn) ensureFutureMutationBuffer(now);
+  playMorphSfx({
+    durationMs: getMutationDurationMs(),
+    intensity: getSfxIntensity(mutationState.to),
+  });
   setStatusMessage(getStoredApiKey() ? "animating to buffered target" : "missing api key; animating only");
   return true;
 }
@@ -368,27 +410,45 @@ function cloneDNAState(dna) {
   };
 }
 
+function continueAfterHeldMutation(now = performance.now()) {
+  if (!mutationState) return;
+
+  if (mutationState.imageUrl) {
+    showSnapshotOverlay(mutationState.imageUrl, mutationState);
+    return;
+  }
+
+  if (mutationState.imageSettled) {
+    const shouldLoop = mutationState.shouldLoop;
+    mutationState = null;
+    if (shouldLoop) startMutationCycle(now);
+    else setStatusMessage("loaded next parameter set");
+    return;
+  }
+
+  mutationState.phase = "awaitingImage";
+  mutationState.phaseStart = now;
+  setStatusMessage("waiting for generated image");
+}
+
 function getQueueSeed(now) {
   const lastQueuedState = futureMutationQueue[futureMutationQueue.length - 1];
   if (lastQueuedState) {
     return {
       from: cloneDNAState(lastQueuedState.to),
-      fromRotation: { ...lastQueuedState.toRotation },
-      plannedStart: lastQueuedState.plannedStart + getMutationDurationMs(),
+      plannedStart: lastQueuedState.plannedStart + getMutationCycleDurationMs(),
     };
   }
 
   if (mutationState) {
     return {
       from: cloneDNAState(mutationState.to),
-      fromRotation: { ...mutationState.toRotation },
-      plannedStart: mutationState.plannedStart + getMutationDurationMs(),
+      plannedStart: mutationState.plannedStart + getMutationCycleDurationMs(),
     };
   }
 
   return {
     from: cloneDNAState(readDNAFromUI()),
-    fromRotation: getCurrentWorldRotation(),
     plannedStart: now,
   };
 }
@@ -397,14 +457,19 @@ function queueFutureMutation(now, options = {}) {
   const { prepareImage = mutateOn } = options;
   const seed = getQueueSeed(now);
   const target = randomMutationTarget(APP.dna.ranges);
+  const fromRotation = getRotationForTimestamp(seed.plannedStart);
+  const toRotation = getRotationForTimestamp(seed.plannedStart + getMutationDurationMs());
+  const holdRotation = getRotationForTimestamp(seed.plannedStart + getMutationRevealDelayMs());
   const queuedState = {
     phase: "queued",
     phaseStart: 0,
     plannedStart: seed.plannedStart,
     from: seed.from,
     to: target,
-    fromRotation: seed.fromRotation,
-    toRotation: getWorldRotationAtTime(getCurrentRotationTimelineTime(seed.plannedStart + getMutationDurationMs())),
+    fromRotation,
+    toRotation,
+    holdRotation,
+    revealRotation: holdRotation,
     imageUrl: null,
     imageSettled: !prepareImage,
     shouldPrepareImage: prepareImage,
@@ -443,29 +508,27 @@ function updateMutation(now) {
     if (t >= 1) {
       setDNAValues(mutationState.to);
       applyWorldRotation(mutationState.toRotation);
-      if (mutationState.imageUrl) {
-        showSnapshotOverlay(mutationState.imageUrl, mutationState);
-      } else if (mutationState.imageSettled) {
-        const shouldLoop = mutationState.shouldLoop;
-        mutationState = null;
-        if (shouldLoop) startMutationCycle(now);
-        else setStatusMessage("loaded next parameter set");
-      } else {
-        mutationState.phase = "awaitingImage";
-        mutationState.phaseStart = now;
-        setStatusMessage("waiting for generated image");
-      }
+      mutationState.phase = "hold";
+      mutationState.phaseStart = now;
+      setStatusMessage(mutationState.imageSettled ? "rotating on mutated form" : "rotating on mutated form while preparing image");
     }
   } else if (mutationState.phase === "hold") {
-    if (elapsed >= APP.timing.mutationHoldMs) startMutationCycle(now);
+    const t = Math.min(elapsed / getMutationHoldDurationMs(), 1);
+    applyWorldRotation(interpolateWorldRotation(mutationState.toRotation, mutationState.holdRotation, t));
+
+    if (t >= 1) {
+      applyWorldRotation(mutationState.holdRotation);
+      continueAfterHeldMutation(now);
+    }
+  } else if (mutationState.phase === "awaitingImage") {
   } else if (mutationState.phase === "overlayFadeIn") {
-    if (elapsed >= APP.timing.overlayFadeInMs) {
+    if (elapsed >= getOverlayFadeInDurationMs()) {
       mutationState.phase = "overlayHold";
       mutationState.phaseStart = now;
       setStatusMessage("showing generated image");
     }
   } else if (mutationState.phase === "overlayHold") {
-    if (elapsed >= APP.timing.overlayHoldMs) {
+    if (elapsed >= getOverlayHoldDurationMs()) {
       clearSnapshotOverlayAndContinue(mutationState);
     }
   }
@@ -479,7 +542,7 @@ async function prepareBufferedMutationAssets(state) {
     }
 
     const apiKey = getStoredApiKey();
-    const referenceImage = await captureReferenceImageForDNA(state.to, state.toRotation);
+    const referenceImage = await captureReferenceImageForDNA(state.to, state.revealRotation);
 
     if (!mutateOn) return;
 
@@ -494,14 +557,7 @@ async function prepareBufferedMutationAssets(state) {
         state.imageUrl = imageUrl;
         state.imageSettled = true;
         if (state.phase === "awaitingImage") {
-          if (imageUrl) {
-            showSnapshotOverlay(imageUrl, state);
-          } else {
-            const shouldLoop = state.shouldLoop;
-            mutationState = null;
-            if (shouldLoop) startMutationCycle(performance.now());
-            else setStatusMessage("loaded next parameter set");
-          }
+          continueAfterHeldMutation(performance.now());
         }
       })
       .catch((error) => {
@@ -601,6 +657,10 @@ function showSnapshotOverlay(imageUrl, state = null, status = "fading in generat
   $("snapshotOverlay").classList.remove("no-transition");
   $("snapshotImage").src = imageUrl;
   $("snapshotOverlay").classList.add("visible");
+  playRevealSfx({
+    durationMs: getOverlayFadeInDurationMs() + getOverlayHoldDurationMs(),
+    intensity: getRevealSfxIntensity(state?.to ?? readDNAFromUI()),
+  });
   if (state) {
     state.phase = "overlayFadeIn";
     state.phaseStart = performance.now();
@@ -666,6 +726,7 @@ function releaseHoldOverlay() {
   keyboardHoldActive = false;
   holdOverlayToken += 1;
   endRotationPause(performance.now());
+  stopAllSfx();
   hideSnapshotOverlay({ immediate: true, status: mutateOn ? "animating to next target" : "" });
 }
 
@@ -719,11 +780,19 @@ $("hideBtn").addEventListener("click", () => {
   syncUI();
 });
 
-$("mutate").addEventListener("click", () => {
+$("mutate").addEventListener("click", async () => {
   mutateOn = !mutateOn;
   releaseHoldOverlay();
-  if (mutateOn) ensureFutureMutationBuffer(performance.now());
-  else stopMutationMode();
+  if (mutateOn) {
+    await primeSfx();
+    playMorphSfx({
+      durationMs: getMutationDurationMs(),
+      intensity: getSfxIntensity(readDNAFromUI()),
+    });
+    ensureFutureMutationBuffer(performance.now());
+  } else {
+    stopMutationMode();
+  }
   syncUI();
 });
 
@@ -838,25 +907,40 @@ function getWorldRotationAtTime(timeMs) {
   };
 }
 
+function pickMineralColorStyle() {
+  const mineralColorStyles = [
+    { color: "dark red", reference: "ruby" },
+    { color: "dark orange", reference: "spessartine garnet" },
+    { color: "deep yellow", reference: "citrine" },
+    { color: "deep green", reference: "emerald" },
+    { color: "deep blue", reference: "sapphire" },
+    { color: "deep indigo", reference: "iolite" },
+    { color: "deep violet", reference: "amethyst" },
+  ];
+
+  return mineralColorStyles[Math.floor(Math.random() * mineralColorStyles.length)];
+}
+
 function buildRenderPrompt() {
+  const mineralColorStyle = pickMineralColorStyle();
   const organPrompt = [
     "Colorize the provided image using Visceral bio-organic body horror, organ-like fleshy textures, sinewy muscle fibers, exposed tissue, veiny membranes, wet glossy surface, translucent skin, grotesque organic folds, tumorous growths, raw anatomical forms",
     "Keep the shape unchanged and use a pure black background",
   ].join(", ");
 
-  const illustrationPrompt = [
-    "Colorize the provided image using pastel cel-shaded sci-fi fantasy illustration with fine line art and a Moebius-inspired graphic aesthetic.",
+  const mineralPrompt = [
+    `Colorize the provided image as an exotic alien ${mineralColorStyle.reference} mineral specimen with a single pure saturated ${mineralColorStyle.color} body color, densely clustered crystalline facets, fractured planes, sharp mineral edges, intricate lapidary geometry, fine surface striations, subtle crystalline inclusions, rich mineral micro-texture, translucent depth, luminous internal glow, high contrast against pure black, and no surface reflections, no glossy glare, no mirror-like highlights.`,
     "Keep the shape unchanged and use a pure black background",
   ].join(", ");
 
   const floraPrompt = [
-    "Colorize the provided image as surreal flower, lush petals, layered leaves, fine veins, subtle translucency, organic coloration, high-detail macro photography lighting, and crisp depth-rich plant textures",
+    "Colorize the provided image as surreal alien flower specimen, lush petals, layered leaves, fine veins, subtle translucency, organic coloration, crisp depth-rich plant textures, no stems, photorealistic lighting, macro lens",
     "Keep the shape unchanged and use a pure black background",
   ].join(", ");
 
   if (renderStyle === "organ") return organPrompt;
   if (renderStyle === "flora") return floraPrompt;
-  return illustrationPrompt;
+  return mineralPrompt;
 }
 
 function smoothstep01(t) {
