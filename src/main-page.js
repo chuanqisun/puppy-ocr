@@ -105,6 +105,7 @@ const RENDER_STYLE_SEQUENCE = ["organ", "flora", "liquid", "ribbon", "mineral"];
 const APP_MODE_SEQUENCE = ["manual", "preview", "demo"];
 const SPACE_HOLD_DELAY_MS = 180;
 const LIVE_PREVIEW_REFRESH_DELAY_MS = 500;
+const MOBILE_VIEWPORT_MEDIA_QUERY = "(max-width: 767px)";
 const UI_VALUE_FIELDS = ["order", "warp", "fold", "spike", "chaos"];
 const RENDER_MODE_SELECTOR = 'input[name="renderMode"]';
 const RENDER_STYLE_SELECTOR = 'input[name="renderStyle"]';
@@ -115,7 +116,9 @@ scene.add(world);
 
 const dom = {
   apiKey: document.getElementById("apiKey"),
+  beginButton: document.getElementById("beginBtn"),
   hideButton: document.getElementById("hideBtn"),
+  launchOverlay: document.getElementById("launchOverlay"),
   randomizeButton: document.getElementById("randomizeBtn"),
   status: document.getElementById("status"),
   snapshotOverlay: document.getElementById("snapshotOverlay"),
@@ -129,7 +132,7 @@ let mutationState = null;
 const futureMutationQueue = [];
 let renderMode = "point";
 let renderStyle = getStoredRenderStyle();
-let menuHidden = false;
+let menuHidden = isMobileViewport();
 let statusMessage = "";
 let keyboardHoldTimer = 0;
 let keyboardSpacePressed = false;
@@ -147,6 +150,7 @@ let captureInitializationPromise = null;
 let captureWriteQueue = Promise.resolve();
 let demoAssetOrder = shuffleArray(demoImages.map((_, index) => index));
 let demoAssetCursor = 0;
+let appStarted = false;
 
 const renderQueue = new RenderQueue({
   concurrency: 3,
@@ -536,7 +540,12 @@ function getStoredLivePreview() {
   return false;
 }
 
+function isMobileViewport() {
+  return window.matchMedia(MOBILE_VIEWPORT_MEDIA_QUERY).matches;
+}
+
 function getInitialAppMode() {
+  if (!livePreviewEnabled) return "demo";
   if (mutateOn) return "demo";
   if (livePreviewEnabled) return "preview";
   return "manual";
@@ -585,7 +594,23 @@ function syncUI() {
   dom.hideButton.textContent = menuHidden ? "Menu" : "Hide";
   dom.apiKey.value = getStoredApiKey();
   dom.uiShell.classList.toggle("collapsed", menuHidden);
+  dom.launchOverlay.classList.toggle("hidden", appStarted);
   dom.status.textContent = statusMessage || getModeHint(appMode);
+}
+
+async function startApp() {
+  if (appStarted) return;
+
+  appStarted = true;
+  syncUI();
+
+  try {
+    await primeSfx();
+  } catch (error) {
+    console.warn("Unable to prime audio:", error);
+  }
+
+  await setAppMode("demo");
 }
 
 function readDNAFromUI() {
@@ -902,7 +927,12 @@ function setLivePreviewEnabled(enabled) {
 }
 
 async function setAppMode(mode) {
-  if (!APP_MODE_SEQUENCE.includes(mode) || appMode === mode) {
+  const modeAlreadyApplied =
+    (mode === "demo" && appMode === mode && mutateOn) ||
+    (mode === "preview" && appMode === mode && livePreviewEnabled) ||
+    (mode === "manual" && appMode === mode && !mutateOn && !livePreviewEnabled);
+
+  if (!APP_MODE_SEQUENCE.includes(mode) || modeAlreadyApplied) {
     syncUI();
     return;
   }
@@ -1422,6 +1452,10 @@ dom.randomizeButton.addEventListener("click", () => {
   triggerSingleMutationTransition();
 });
 
+dom.beginButton.addEventListener("click", () => {
+  void startApp();
+});
+
 dom.snapshotImage.draggable = false;
 dom.snapshotImage.addEventListener("dragstart", (event) => {
   event.preventDefault();
@@ -1453,6 +1487,7 @@ controls.addEventListener("end", () => {
 });
 
 addEventListener("keydown", (event) => {
+  if (!appStarted) return;
   if (isFormFieldTarget(event.target)) return;
 
   if (event.key === "Tab") {
@@ -1491,6 +1526,7 @@ addEventListener("keydown", (event) => {
 });
 
 addEventListener("keyup", (event) => {
+  if (!appStarted) return;
   if (isFormFieldTarget(event.target)) return;
   if (event.code !== "Space") return;
 
