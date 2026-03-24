@@ -1,8 +1,12 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { playMorphSfx, playRevealSfx, primeSfx, stopAllSfx } from "./sfx.js";
+import { get as idbGet, set as idbSet, del as idbDel, clear as idbClear } from 'idb-keyval';
 
 const imageApiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL ?? window.location.origin).trim();
+
+// Clear idb-keyval cache on app start
+idbClear();
 const PARAMETER_IDS = ["order", "warp", "fold", "spike", "chaos"];
 
 const APP = {
@@ -165,20 +169,19 @@ function buildHeldRenderCacheKey(dna, rotation, style = renderStyle, cameraState
   });
 }
 
-function getHeldRenderCache(key) {
+async function getHeldRenderCache(key) {
   try {
-    const cached = window.sessionStorage.getItem(key);
+    const cached = await idbGet(key);
     return cached && cached.trim() ? cached : null;
   } catch {
     return null;
   }
 }
 
-function setHeldRenderCache(key, imageUrl) {
+async function setHeldRenderCache(key, imageUrl) {
   if (!imageUrl) return;
-
   try {
-    window.sessionStorage.setItem(key, imageUrl);
+    await idbSet(key, imageUrl);
   } catch (error) {
     console.warn("Unable to cache held render result:", error);
   }
@@ -839,12 +842,12 @@ async function captureReferenceImageForDNA(dna, rotation) {
 
 async function requestOverlayForState(dna, rotation) {
   const cacheKey = buildHeldRenderCacheKey(dna, rotation);
-  const cachedImage = getHeldRenderCache(cacheKey);
+  const cachedImage = await getHeldRenderCache(cacheKey);
   if (cachedImage) return cachedImage;
 
   const referenceImage = await captureReferenceImageForDNA(dna, rotation);
   const imageUrl = getStoredApiKey() ? await requestGeneratedImage(referenceImage, dna) : referenceImage;
-  setHeldRenderCache(cacheKey, imageUrl);
+  await setHeldRenderCache(cacheKey, imageUrl);
   return imageUrl;
 }
 

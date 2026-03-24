@@ -24,6 +24,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.2.1",
+    "idb-keyval": "^6.2.2",
     "replicate": "^1.1.0",
     "three": "^0.183.2"
   },
