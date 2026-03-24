@@ -19,6 +19,7 @@ const APP = {
   api: {
     baseUrl: imageApiBaseUrl,
     apiKeyStorageKey: "life-config.replicate-api-key",
+    renderStyleStorageKey: "life-config.render-style",
     snapshotSize: 768,
   },
   mesh: {
@@ -101,6 +102,7 @@ let mutateOn = false;
 let mutationState = null;
 const futureMutationQueue = [];
 let renderMode = "point";
+let renderStyle = getStoredRenderStyle();
 let menuHidden = false;
 let statusMessage = "";
 let rotationPauseStartedAt = null;
@@ -133,6 +135,16 @@ function setStoredApiKey(value) {
   window.localStorage.setItem(APP.api.apiKeyStorageKey, value.trim());
 }
 
+function getStoredRenderStyle() {
+  const value = window.localStorage.getItem(APP.api.renderStyleStorageKey);
+  return value === "organ" || value === "flora" ? value : "illustration";
+}
+
+function setStoredRenderStyle(value) {
+  renderStyle = value === "organ" || value === "flora" ? value : "illustration";
+  window.localStorage.setItem(APP.api.renderStyleStorageKey, renderStyle);
+}
+
 function setStatusMessage(message) {
   statusMessage = message;
   $("status").textContent = message;
@@ -147,6 +159,9 @@ function syncUI() {
   $("mutate").textContent = mutateOn ? "Mutate: On" : "Mutate: Off";
   document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
     el.checked = el.value === renderMode;
+  });
+  document.querySelectorAll('input[name="renderStyle"]').forEach((el) => {
+    el.checked = el.value === renderStyle;
   });
   $("hideBtn").textContent = menuHidden ? "Show" : "Hide";
   $("apiKey").value = getStoredApiKey();
@@ -687,6 +702,18 @@ document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
   });
 });
 
+document.querySelectorAll('input[name="renderStyle"]').forEach((el) => {
+  el.addEventListener("change", () => {
+    if (!el.checked) return;
+    if (mutateOn) {
+      releaseHoldOverlay();
+      stopMutationMode();
+    }
+    setStoredRenderStyle(el.value);
+    syncUI();
+  });
+});
+
 $("hideBtn").addEventListener("click", () => {
   menuHidden = !menuHidden;
   syncUI();
@@ -812,10 +839,24 @@ function getWorldRotationAtTime(timeMs) {
 }
 
 function buildRenderPrompt() {
-  return [
+  const organPrompt = [
+    "Colorize the provided image using Visceral bio-organic body horror, organ-like fleshy textures, sinewy muscle fibers, exposed tissue, veiny membranes, wet glossy surface, translucent skin, grotesque organic folds, tumorous growths, raw anatomical forms",
+    "Keep the shape unchanged and use a pure black background",
+  ].join(", ");
+
+  const illustrationPrompt = [
     "Colorize the provided image using pastel cel-shaded sci-fi fantasy illustration with fine line art and a Moebius-inspired graphic aesthetic.",
     "Keep the shape unchanged and use a pure black background",
   ].join(", ");
+
+  const floraPrompt = [
+    "Colorize the provided image as surreal flower, lush petals, layered leaves, fine veins, subtle translucency, organic coloration, high-detail macro photography lighting, and crisp depth-rich plant textures",
+    "Keep the shape unchanged and use a pure black background",
+  ].join(", ");
+
+  if (renderStyle === "organ") return organPrompt;
+  if (renderStyle === "flora") return floraPrompt;
+  return illustrationPrompt;
 }
 
 function smoothstep01(t) {
