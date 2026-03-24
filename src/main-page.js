@@ -20,6 +20,7 @@ const APP = {
   api: {
     baseUrl: imageApiBaseUrl,
     apiKeyStorageKey: "life-config.replicate-api-key",
+    livePreviewStorageKey: "life-config.live-preview",
     renderStyleStorageKey: "life-config.render-style",
     snapshotSize: 768,
   },
@@ -78,7 +79,7 @@ window.addEventListener("keydown", () => {
 document.body.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
+// controls.enableDamping = true;
 controls.enablePan = false;
 controls.mouseButtons.RIGHT = null;
 renderer.domElement.removeEventListener("contextmenu", controls._onContextMenu);
@@ -96,6 +97,7 @@ scene.add(fillLight);
 
 const RENDER_MODE_SEQUENCE = ["point", "mesh", "solid"];
 const SPACE_HOLD_DELAY_MS = 180;
+const LIVE_PREVIEW_REFRESH_DELAY_MS = 500;
 
 const world = new THREE.Group();
 scene.add(world);
@@ -110,21 +112,43 @@ let renderStyle = getStoredRenderStyle();
 let menuHidden = false;
 let statusMessage = "";
 let rotationPauseStartedAt = null;
+const rotationPauseReasons = new Set();
 let rotationTimelineOffsetMs = 0;
 let keyboardHoldTimer = 0;
 let keyboardSpacePressed = false;
 let keyboardHoldActive = false;
 let holdOverlayToken = 0;
 let lastPointerButton = null;
-let autoRotationEnabled = true;
+let livePreviewEnabled = getStoredLivePreview();
+let autoRotationEnabled = !livePreviewEnabled;
+let livePreviewRefreshTimer = 0;
+let livePreviewToken = 0;
+let cameraInteracting = false;
 
 function roundForCacheKey(value, precision = 4) {
   return Number(value.toFixed(precision));
 }
 
-function buildHeldRenderCacheKey(dna, rotation, style = renderStyle) {
+function getCameraCacheState() {
+  return {
+    position: {
+      x: roundForCacheKey(camera.position.x),
+      y: roundForCacheKey(camera.position.y),
+      z: roundForCacheKey(camera.position.z),
+    },
+    quaternion: {
+      x: roundForCacheKey(camera.quaternion.x),
+      y: roundForCacheKey(camera.quaternion.y),
+      z: roundForCacheKey(camera.quaternion.z),
+      w: roundForCacheKey(camera.quaternion.w),
+    },
+  };
+}
+
+function buildHeldRenderCacheKey(dna, rotation, style = renderStyle, cameraState = getCameraCacheState()) {
   return JSON.stringify({
     style,
+    source: getStoredApiKey() ? "ai" : "reference",
     dna: {
       order: roundForCacheKey(dna.order),
       warp: roundForCacheKey(dna.warp),
@@ -137,6 +161,7 @@ function buildHeldRenderCacheKey(dna, rotation, style = renderStyle) {
       x: roundForCacheKey(rotation.x),
       y: roundForCacheKey(rotation.y),
     },
+    camera: cameraState,
   });
 }
 
@@ -216,9 +241,17 @@ function getStoredRenderStyle() {
   return value === "organ" || value === "flora" ? value : "illustration";
 }
 
+function getStoredLivePreview() {
+  return false;
+}
+
 function setStoredRenderStyle(value) {
   renderStyle = value === "organ" || value === "flora" ? value : "illustration";
   window.localStorage.setItem(APP.api.renderStyleStorageKey, renderStyle);
+}
+
+function setStoredLivePreview(value) {
+  window.localStorage.setItem(APP.api.livePreviewStorageKey, value ? "true" : "false");
 }
 
 function setStatusMessage(message) {
@@ -239,6 +272,7 @@ function syncUI() {
   document.querySelectorAll('input[name="renderStyle"]').forEach((el) => {
     el.checked = el.value === renderStyle;
   });
+  $("livePreview").checked = livePreviewEnabled;
   $("hideBtn").textContent = menuHidden ? "Show" : "Hide";
   $("apiKey").value = getStoredApiKey();
   $("uiShell").classList.toggle("collapsed", menuHidden);
@@ -327,15 +361,23 @@ function adjustMutationTimingForPause(now) {
 }
 
 function beginRotationPause(now = performance.now()) {
-  if (rotationPauseStartedAt !== null) return;
-  rotationPauseStartedAt = now;
+  pauseRotationFor("keyboardHold", now);
 }
 
-function endRotationPause(now = performance.now()) {
-  if (rotationPauseStartedAt === null) return;
+function endRotationPause(reason = "keyboardHold", now = performance.now()) {
+  if (!rotationPauseReasons.has(reason)) return;
+  rotationPauseReasons.delete(reason);
+  if (rotationPauseReasons.size || rotationPauseStartedAt === null) return;
   adjustMutationTimingForPause(now);
   rotationTimelineOffsetMs += now - rotationPauseStartedAt;
   rotationPauseStartedAt = null;
+}
+
+function pauseRotationFor(reason, now = performance.now()) {
+  if (rotationPauseReasons.has(reason)) return;
+  rotationPauseReasons.add(reason);
+  if (rotationPauseStartedAt !== null) return;
+  rotationPauseStartedAt = now;
 }
 
 function getCurrentWorldRotation() {
@@ -358,6 +400,17 @@ function clearKeyboardHoldTimer() {
   if (!keyboardHoldTimer) return;
   window.clearTimeout(keyboardHoldTimer);
   keyboardHoldTimer = 0;
+}
+
+function clearLivePreviewRefreshTimer() {
+  if (!livePreviewRefreshTimer) return;
+  window.clearTimeout(livePreviewRefreshTimer);
+  livePreviewRefreshTimer = 0;
+}
+
+function cancelPendingLivePreviewRequest() {
+  livePreviewToken += 1;
+  clearLivePreviewRefreshTimer();
 }
 
 function shouldRestartMutationAfterControlEnd() {
@@ -492,6 +545,80 @@ function continueAfterHeldMutation(now = performance.now()) {
   mutationState.phase = "awaitingImage";
   mutationState.phaseStart = now;
   setStatusMessage("waiting for generated image");
+}
+
+function suspendLivePreview(status = "") {
+  cancelPendingLivePreviewRequest();
+  endRotationPause("livePreview", performance.now());
+  hideSnapshotOverlay({ immediate: true, status });
+}
+
+function queueLivePreviewRefresh(debounceMs = LIVE_PREVIEW_REFRESH_DELAY_MS, status = "capturing live preview") {
+  if (!livePreviewEnabled) return;
+  suspendLivePreview("");
+  refreshLivePreview({ debounceMs, status });
+}
+
+function refreshLivePreview(options = {}) {
+  const { debounceMs = 0, status = "capturing live preview" } = options;
+
+  if (!livePreviewEnabled || mutateOn || keyboardHoldActive || cameraInteracting) return;
+
+  cancelPendingLivePreviewRequest();
+  const requestToken = ++livePreviewToken;
+  const startRequest = () => {
+    if (!livePreviewEnabled || mutateOn || keyboardHoldActive || cameraInteracting || requestToken !== livePreviewToken) return;
+
+    const rotation = getCurrentWorldRotation();
+    const dna = cloneDNAState(readDNAFromUI());
+
+    hideSnapshotOverlay({ immediate: true, status });
+
+    requestOverlayForState(dna, rotation)
+      .then((imageUrl) => {
+        if (!livePreviewEnabled || mutateOn || keyboardHoldActive || cameraInteracting || requestToken !== livePreviewToken) {
+          if (typeof imageUrl === "string" && imageUrl.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
+          return;
+        }
+        pauseRotationFor("livePreview", performance.now());
+        showSnapshotOverlay(imageUrl, null, "showing live preview");
+      })
+      .catch((error) => {
+        if (!livePreviewEnabled || requestToken !== livePreviewToken) return;
+        setStatusMessage(error instanceof Error ? error.message : "live preview failed");
+      });
+  };
+
+  if (debounceMs > 0) {
+    livePreviewRefreshTimer = window.setTimeout(() => {
+      livePreviewRefreshTimer = 0;
+      startRequest();
+    }, debounceMs);
+    return;
+  }
+
+  startRequest();
+}
+
+function setLivePreviewEnabled(enabled) {
+  if (enabled && mutateOn) {
+    releaseHoldOverlay();
+    stopMutationMode();
+  }
+
+  livePreviewEnabled = enabled;
+  setStoredLivePreview(enabled);
+
+  if (enabled) {
+    disableAutoRotation();
+    releaseHoldOverlay();
+    refreshLivePreview();
+  } else {
+    if (!cameraInteracting) enableAutoRotation();
+    suspendLivePreview("");
+  }
+
+  syncUI();
 }
 
 function getQueueSeed(now) {
@@ -773,7 +900,7 @@ function activateHoldOverlay() {
   const heldDna = cloneDNAState(readDNAFromUI());
 
   keyboardHoldActive = true;
-  beginRotationPause(now);
+  pauseRotationFor("keyboardHold", now);
   hideSnapshotOverlay({ immediate: true, status: "capturing held render" });
 
   requestOverlayForState(heldDna, heldRotation)
@@ -794,7 +921,7 @@ function releaseHoldOverlay() {
   if (!keyboardHoldActive) return;
   keyboardHoldActive = false;
   holdOverlayToken += 1;
-  endRotationPause(performance.now());
+  endRotationPause("keyboardHold", performance.now());
   stopAllSfx();
   hideSnapshotOverlay({ immediate: true, status: mutateOn ? "animating to next target" : "" });
 }
@@ -807,6 +934,7 @@ PARAMETER_IDS.forEach((id) => {
     }
     syncUI();
     buildMorphology();
+    queueLivePreviewRefresh();
   });
 });
 
@@ -817,6 +945,11 @@ $("apiKey").addEventListener("input", (event) => {
     stopMutationMode();
     syncUI();
   }
+  queueLivePreviewRefresh();
+});
+
+$("livePreview").addEventListener("change", (event) => {
+  setLivePreviewEnabled(event.target.checked);
 });
 
 document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
@@ -828,6 +961,7 @@ document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
       }
       releaseHoldOverlay();
       setRenderMode(el.value);
+      queueLivePreviewRefresh();
     }
   });
 });
@@ -841,6 +975,7 @@ document.querySelectorAll('input[name="renderStyle"]').forEach((el) => {
     }
     setStoredRenderStyle(el.value);
     syncUI();
+    queueLivePreviewRefresh();
   });
 });
 
@@ -853,6 +988,11 @@ $("mutate").addEventListener("click", async () => {
   mutateOn = !mutateOn;
   releaseHoldOverlay();
   if (mutateOn) {
+    if (livePreviewEnabled) {
+      livePreviewEnabled = false;
+      setStoredLivePreview(false);
+      suspendLivePreview("");
+    }
     enableAutoRotation();
     await primeSfx();
     playMorphSfx({
@@ -867,10 +1007,13 @@ $("mutate").addEventListener("click", async () => {
 });
 
 controls.addEventListener("start", () => {
+  cameraInteracting = true;
   disableAutoRotation();
+  if (livePreviewEnabled) suspendLivePreview("");
 });
 
 controls.addEventListener("end", () => {
+  cameraInteracting = false;
   if (!controls.enabled) return;
   disableAutoRotation();
   if (!shouldRestartMutationAfterControlEnd()) return;
@@ -878,6 +1021,11 @@ controls.addEventListener("end", () => {
   releaseHoldOverlay();
   stopMutationMode();
   syncUI();
+});
+
+controls.addEventListener("end", () => {
+  if (!controls.enabled) return;
+  queueLivePreviewRefresh();
 });
 
 addEventListener("keydown", (event) => {
@@ -895,6 +1043,7 @@ addEventListener("keydown", (event) => {
     event.preventDefault();
     if (mutateOn) stopMutationMode();
     releaseHoldOverlay();
+    if (livePreviewEnabled) suspendLivePreview("animating to buffered target");
     beginQueuedMutation(performance.now(), { shouldLoop: false });
     return;
   }
