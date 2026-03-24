@@ -17,7 +17,7 @@ const APP = {
     color: 0xffffff,
     solidOpacity: 1.0,
     meshOpacity: 0.1,
-    pointOpacity: 1.0,
+    pointOpacity: 0.9,
     pointSize: 0.02,
     uSeg: 220,
     vSeg: 100,
@@ -79,12 +79,38 @@ scene.add(world);
 
 const $ = (id) => document.getElementById(id);
 
-let seed = (Math.random() * 1e9) | 0;
 let mutateOn = false;
 let mutationState = null;
 let renderMode = "solid";
 let menuHidden = false;
 let statusMessage = "";
+
+function randomInitialDNA(ranges) {
+  return {
+    order: ranges.order.min + Math.random() * (ranges.order.max - ranges.order.min),
+    warp: ranges.warp.min + Math.random() * (ranges.warp.max - ranges.warp.min),
+    fold: ranges.fold.min + Math.random() * (ranges.fold.max - ranges.fold.min),
+    spike: ranges.spike.min + Math.random() * (ranges.spike.max - ranges.spike.min),
+    chaos: ranges.chaos.min + Math.random() * (ranges.chaos.max - ranges.chaos.min),
+    layers: APP.dna.defaults.layers,
+  };
+}
+
+function getWorldRotationAtTime(timeMs) {
+  return {
+    x: Math.sin(timeMs * APP.animation.worldRotXFreq) * APP.animation.worldRotXAmp,
+    y: timeMs * APP.animation.worldRotY,
+  };
+}
+
+function applyGroupRotation(group, rotation) {
+  group.rotation.x = rotation.x;
+  group.rotation.y = rotation.y;
+}
+
+function applyWorldRotation(rotation) {
+  applyGroupRotation(world, rotation);
+}
 
 function getStoredApiKey() {
   return window.localStorage.getItem(APP.api.apiKeyStorageKey) ?? "";
@@ -105,9 +131,6 @@ function syncUI() {
   $("foldVal").textContent = (+$("fold").value).toFixed(2);
   $("spikeVal").textContent = (+$("spike").value).toFixed(2);
   $("chaosVal").textContent = (+$("chaos").value).toFixed(2);
-  $("layersVal").textContent = $("layers").value;
-  $("meshOpacityVal").textContent = (+$("meshOpacity").value).toFixed(2);
-  $("pointOpacityVal").textContent = (+$("pointOpacity").value).toFixed(2);
   $("mutate").textContent = mutateOn ? "Mutate: On" : "Mutate: Off";
   document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
     el.checked = el.value === renderMode;
@@ -125,7 +148,7 @@ function readDNAFromUI() {
     fold: +$("fold").value,
     spike: +$("spike").value,
     chaos: +$("chaos").value,
-    layers: +$("layers").value,
+    layers: APP.dna.defaults.layers,
   };
 }
 
@@ -135,7 +158,6 @@ function writeDNAControls(d) {
   $("fold").value = d.fold.toFixed(2);
   $("spike").value = d.spike.toFixed(2);
   $("chaos").value = d.chaos.toFixed(2);
-  if (typeof d.layers === "number") $("layers").value = String(d.layers);
 }
 
 function setDNAValues(d) {
@@ -203,12 +225,8 @@ function buildLayer(d, layerIndex, group = world, mode = renderMode) {
 }
 
 function buildMorphology() {
-  APP.mesh.meshOpacity = +$("meshOpacity").value;
-  APP.mesh.pointOpacity = +$("pointOpacity").value;
-
   clearGroup(world);
   const d = readDNAFromUI();
-  rngFactory(seed);
   for (let i = 0; i < d.layers; i++) buildLayer(d, i);
 }
 
@@ -228,6 +246,8 @@ function startMutationCycle(now) {
       layers: current.layers,
     },
     to: target,
+    fromRotation: null,
+    toRotation: null,
     imageUrl: null,
     imageSettled: false,
     requestToken: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -255,9 +275,11 @@ function updateMutation(now) {
     const e = smoothstep01(t);
 
     setDNAValues(interpolateMutationState(mutationState.from, mutationState.to, e));
+    applyWorldRotation(interpolateWorldRotation(mutationState.fromRotation, mutationState.toRotation, e));
 
     if (t >= 1) {
       setDNAValues(mutationState.to);
+      applyWorldRotation(mutationState.toRotation);
       if (mutationState.imageUrl) {
         showSnapshotOverlay(mutationState.imageUrl, mutationState);
       } else if (mutationState.imageSettled) {
@@ -283,7 +305,10 @@ async function prepareMutationSnapshot(state) {
 
   try {
     const apiKey = getStoredApiKey();
-    const referenceImage = await captureReferenceImageForDNA(state.to);
+    const interpStart = performance.now();
+    state.fromRotation = { x: world.rotation.x, y: world.rotation.y };
+    state.toRotation = getWorldRotationAtTime(interpStart + APP.mutation.interpMs);
+    const referenceImage = await captureReferenceImageForDNA(state.to, state.toRotation);
 
     if (mutationState !== state || !mutateOn) return;
 
@@ -310,7 +335,7 @@ async function prepareMutationSnapshot(state) {
       });
 
     state.phase = "interp";
-    state.phaseStart = performance.now();
+    state.phaseStart = interpStart;
     setStatusMessage(apiKey ? "animating to next target" : "missing api key; animating only");
   } catch (error) {
     if (mutationState !== state) return;
@@ -352,17 +377,12 @@ async function requestGeneratedImage(referenceImage, dna) {
 
 function buildRenderPrompt(dna) {
   return [
-    "Edit the provided reference image into a polished monochrome alien specimen illustration",
-    "preserve the existing anatomy and centered composition from the reference render",
-    "keep the background pure black",
-    "retain the white material silhouette and emphasize crisp folds, membrane depth, and biological detail",
-    `shape values order ${dna.order.toFixed(2)}, warp ${dna.warp.toFixed(2)}, fold ${dna.fold.toFixed(2)}, spike ${dna.spike.toFixed(
-      2
-    )}, symmetry ${dna.chaos.toFixed(2)}, layers ${dna.layers}`,
+    "Colorize the provided image using pastel cel-shaded sci-fi fantasy illustration with fine line art and a Moebius-inspired graphic aesthetic.",
+    "Keep the shape unchanged and use a pure black background",
   ].join(", ");
 }
 
-async function captureReferenceImageForDNA(dna) {
+async function captureReferenceImageForDNA(dna, rotation) {
   const snapshotRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   snapshotRenderer.setSize(APP.api.snapshotSize, APP.api.snapshotSize);
   snapshotRenderer.setPixelRatio(1);
@@ -385,6 +405,7 @@ async function captureReferenceImageForDNA(dna) {
 
   const snapshotWorld = new THREE.Group();
   snapshotScene.add(snapshotWorld);
+  if (rotation) applyGroupRotation(snapshotWorld, rotation);
 
   for (let i = 0; i < dna.layers; i++) buildLayer(dna, i, snapshotWorld, "solid");
 
@@ -416,7 +437,7 @@ function hideSnapshotOverlay() {
   setStatusMessage("animating to next target");
 }
 
-["order", "warp", "fold", "spike", "chaos", "layers", "meshOpacity", "pointOpacity"].forEach((id) => {
+["order", "warp", "fold", "spike", "chaos"].forEach((id) => {
   $(id).addEventListener("input", () => {
     if (["order", "warp", "fold", "spike", "chaos"].includes(id) && mutateOn) {
       mutateOn = false;
@@ -455,39 +476,24 @@ $("mutate").addEventListener("click", () => {
   syncUI();
 });
 
-$("seedBtn").addEventListener("click", () => {
-  seed = (Math.random() * 1e9) | 0;
-  buildMorphology();
-});
-
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
+writeDNAControls(randomInitialDNA(APP.dna.ranges));
 syncUI();
 buildMorphology();
 
 function animate(t) {
   requestAnimationFrame(animate);
   updateMutation(t);
-  world.rotation.y = t * APP.animation.worldRotY;
-  world.rotation.x = Math.sin(t * APP.animation.worldRotXFreq) * APP.animation.worldRotXAmp;
+  if (!mutateOn || !mutationState || mutationState.phase === "preparing") applyWorldRotation(getWorldRotationAtTime(t));
   controls.update();
   renderer.render(scene, camera);
 }
 animate(0);
-
-function rngFactory(s) {
-  let t = s >>> 0;
-  return () => {
-    t += 0x6d2b79f5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function randomMutationTarget(ranges) {
   return {
@@ -496,7 +502,7 @@ function randomMutationTarget(ranges) {
     fold: ranges.fold.min + Math.random() * (ranges.fold.max - ranges.fold.min),
     spike: ranges.spike.min + Math.random() * (ranges.spike.max - ranges.spike.min),
     chaos: ranges.chaos.min + Math.random() * (ranges.chaos.max - ranges.chaos.min),
-    layers: +$("layers").value,
+    layers: APP.dna.defaults.layers,
   };
 }
 
@@ -512,6 +518,13 @@ function interpolateMutationState(from, to, t) {
     spike: from.spike + (to.spike - from.spike) * t,
     chaos: from.chaos + (to.chaos - from.chaos) * t,
     layers: to.layers,
+  };
+}
+
+function interpolateWorldRotation(from, to, t) {
+  return {
+    x: from.x + (to.x - from.x) * t,
+    y: from.y + (to.y - from.y) * t,
   };
 }
 

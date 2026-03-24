@@ -212,7 +212,7 @@
         opacity: 0;
         pointer-events: none;
         transition: opacity 140ms ease;
-        background: rgba(0, 0, 0, 0.18);
+        background: #000;
       }
 
       .snapshot-overlay.visible {
@@ -220,12 +220,13 @@
       }
 
       .snapshot-overlay img {
-        width: min(72vw, 72vh);
-        height: min(72vw, 72vh);
+        width: 100vw;
+        height: 100vh;
+        max-width: 100vw;
+        max-height: 100vh;
         object-fit: contain;
-        border-radius: 18px;
-        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
-        background: rgba(255, 255, 255, 0.02);
+        object-position: center;
+        background: #000;
       }
     </style>
   </head>
@@ -273,21 +274,6 @@
           <input id="chaos" type="range" min="0" max="1.2" step="0.01" value="0.22" />
         </div>
 
-        <div class="control">
-          <div class="control-head"><span>Layering</span><span id="layersVal">3</span></div>
-          <input id="layers" type="range" min="1" max="6" step="1" value="3" />
-        </div>
-
-        <div class="control">
-          <div class="control-head"><span>Mesh Opacity</span><span id="meshOpacityVal">0.10</span></div>
-          <input id="meshOpacity" type="range" min="0" max="1" step="0.01" value="0.10" />
-        </div>
-
-        <div class="control">
-          <div class="control-head"><span>Point Opacity</span><span id="pointOpacityVal">0.90</span></div>
-          <input id="pointOpacity" type="range" min="0" max="1" step="0.01" value="0.90" />
-        </div>
-
         <div class="render-mode-group">
           <span class="render-mode-title">Render Mode</span>
           <div class="radio-row">
@@ -299,7 +285,6 @@
 
         <div class="buttons">
           <button id="mutate">Mutate: Off</button>
-          <button id="seedBtn" class="alt">New Seed</button>
         </div>
 
         <div id="status" class="status"></div>
