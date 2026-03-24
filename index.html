@@ -38,6 +38,7 @@
         --control-height: 2px;
         --thumb-size: 12px;
         --panel-width: 260px;
+        --panel-collapsed-opacity: 0.5;
         --panel-blur: 10px;
         --transition-panel: 180ms ease;
         --transition-overlay: var(--snapshot-overlay-fade-in-ms, 250ms) ease;
@@ -91,15 +92,33 @@
       }
 
       .panel-shell.collapsed .panel {
-        opacity: 0;
-        transform: translateX(0);
-        pointer-events: none;
+        width: auto;
+        padding: 0;
+        background: transparent;
+        border-color: transparent;
+        backdrop-filter: none;
       }
 
-      .panel-shell.collapsed:hover .panel {
-        opacity: 1;
+      .panel-shell.collapsed .panel > :not(.panel-header) {
+        display: none;
+      }
+
+      .panel-shell.collapsed .panel-header {
+        margin-bottom: 0;
+      }
+
+      .panel-shell.collapsed .panel-title {
+        display: none;
+      }
+
+      .panel-shell.collapsed .button-ghost {
+        opacity: var(--panel-collapsed-opacity);
         transform: translateX(0);
-        pointer-events: auto;
+        transition: opacity var(--transition-panel);
+      }
+
+      .panel-shell.collapsed .button-ghost:hover {
+        opacity: 1;
       }
 
       .panel-header,
@@ -345,9 +364,11 @@
         <div class="choice-group">
           <span>Style</span>
           <div class="choice-list">
-            <label><input type="radio" name="renderStyle" value="illustration" checked /> Mineral</label>
+            <label><input type="radio" name="renderStyle" value="mineral" checked /> Mineral</label>
             <label><input type="radio" name="renderStyle" value="organ" /> Organ</label>
             <label><input type="radio" name="renderStyle" value="flora" /> Flora</label>
+            <label><input type="radio" name="renderStyle" value="powder" /> Powder</label>
+            <label><input type="radio" name="renderStyle" value="supernova" /> Ribbon</label>
           </div>
         </div>
 

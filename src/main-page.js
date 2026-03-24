@@ -246,7 +246,7 @@ function setStoredApiKey(value) {
 
 function getStoredRenderStyle() {
   const value = window.localStorage.getItem(APP.api.renderStyleStorageKey);
-  return value === "organ" || value === "flora" ? value : "illustration";
+  return value === "organ" || value === "flora" || value === "powder" || value === "supernova" || value === "mineral" ? value : "mineral";
 }
 
 function getStoredLivePreview() {
@@ -260,7 +260,7 @@ function getInitialAppMode() {
 }
 
 function setStoredRenderStyle(value) {
-  renderStyle = value === "organ" || value === "flora" ? value : "illustration";
+  renderStyle = value === "organ" || value === "flora" || value === "powder" || value === "supernova" || value === "mineral" ? value : "mineral";
   window.localStorage.setItem(APP.api.renderStyleStorageKey, renderStyle);
 }
 
@@ -299,7 +299,7 @@ function syncUI() {
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
-  dom.hideButton.textContent = menuHidden ? "Show" : "Hide";
+  dom.hideButton.textContent = menuHidden ? "Menu" : "Hide";
   dom.apiKey.value = getStoredApiKey();
   dom.uiShell.classList.toggle("collapsed", menuHidden);
   dom.status.textContent = statusMessage || getModeHint(appMode);
@@ -625,7 +625,7 @@ function setLivePreviewEnabled(enabled) {
     releaseHoldOverlay();
     refreshLivePreview();
   } else {
-    if (!cameraInteracting) enableAutoRotation();
+    disableAutoRotation();
     suspendLivePreview("");
   }
 
@@ -655,9 +655,10 @@ async function setAppMode(mode) {
     return;
   }
 
-  if (!cameraInteracting) enableAutoRotation();
+  disableAutoRotation();
 
   if (mode === "demo") {
+    if (!cameraInteracting) enableAutoRotation();
     mutateOn = true;
     await primeSfx();
     playMorphSfx({
@@ -781,7 +782,7 @@ async function prepareBufferedMutationAssets(state) {
     }
 
     const apiKey = getStoredApiKey();
-    const referenceImage = await captureReferenceImageForDNA(state.to, state.revealRotation);
+    const referenceImage = await captureReferenceImageForDNA(state.to, state.revealRotation, getReferenceRenderModeForAi());
 
     if (!mutateOn) return;
 
@@ -852,7 +853,11 @@ snapshotRenderer.setPixelRatio(1);
 snapshotRenderer.outputColorSpace = THREE.SRGBColorSpace;
 snapshotRenderer.setClearColor(APP.renderer.clearColor, 1);
 
-async function captureReferenceImageForDNA(dna, rotation) {
+function getReferenceRenderModeForAi(style = renderStyle) {
+  return "solid";
+}
+
+async function captureReferenceImageForDNA(dna, rotation, mode = "solid") {
   const snapshotScene = new THREE.Scene();
   const snapshotCamera = new THREE.PerspectiveCamera(APP.camera.fov, 1, APP.camera.near, APP.camera.far);
   snapshotCamera.position.copy(camera.position);
@@ -873,7 +878,7 @@ async function captureReferenceImageForDNA(dna, rotation) {
   snapshotScene.add(snapshotWorld);
   if (rotation) applyGroupRotation(snapshotWorld, rotation);
 
-  for (let i = 0; i < dna.layers; i++) buildLayer(dna, i, snapshotWorld, "solid");
+  for (let i = 0; i < dna.layers; i++) buildLayer(dna, i, snapshotWorld, mode);
 
   snapshotRenderer.render(snapshotScene, snapshotCamera);
   const dataUrl = snapshotRenderer.domElement.toDataURL("image/png");
@@ -891,7 +896,7 @@ async function requestOverlayForState(dna, rotation) {
   const cachedImage = await getHeldRenderCache(cacheKey);
   if (cachedImage) return cachedImage;
 
-  const referenceImage = await captureReferenceImageForDNA(dna, rotation);
+  const referenceImage = await captureReferenceImageForDNA(dna, rotation, getStoredApiKey() ? getReferenceRenderModeForAi() : "solid");
   const imageUrl = getStoredApiKey() ? await requestGeneratedImage(referenceImage, dna) : referenceImage;
   await setHeldRenderCache(cacheKey, imageUrl);
   return imageUrl;
@@ -1006,6 +1011,30 @@ function relayOverlayPointerEventToCanvas(event) {
   dom.canvas.dispatchEvent(forwardedEvent);
 }
 
+function relayOverlayWheelEventToCanvas(event) {
+  if (!dom.snapshotOverlay.classList.contains("visible")) return;
+
+  const forwardedEvent = new WheelEvent(event.type, {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    deltaX: event.deltaX,
+    deltaY: event.deltaY,
+    deltaZ: event.deltaZ,
+    deltaMode: event.deltaMode,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    screenX: event.screenX,
+    screenY: event.screenY,
+    ctrlKey: event.ctrlKey,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    metaKey: event.metaKey,
+  });
+
+  dom.canvas.dispatchEvent(forwardedEvent);
+}
+
 function handleOverlayPointerDown(event) {
   if (event.button !== 0) return;
   forwardedOverlayPointerId = event.pointerId;
@@ -1027,6 +1056,12 @@ function handleOverlayPointerEnd(event) {
   event.stopPropagation();
   relayOverlayPointerEventToCanvas(event);
   forwardedOverlayPointerId = null;
+}
+
+function handleOverlayWheel(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  relayOverlayWheelEventToCanvas(event);
 }
 
 PARAMETER_IDS.forEach((id) => {
@@ -1097,6 +1132,7 @@ dom.snapshotImage.addEventListener("pointerdown", handleOverlayPointerDown);
 dom.snapshotImage.addEventListener("pointermove", handleOverlayPointerMove);
 dom.snapshotImage.addEventListener("pointerup", handleOverlayPointerEnd);
 dom.snapshotImage.addEventListener("pointercancel", handleOverlayPointerEnd);
+dom.snapshotImage.addEventListener("wheel", handleOverlayWheel, { passive: false });
 
 controls.addEventListener("start", () => {
   cameraInteracting = true;
@@ -1224,8 +1260,20 @@ function buildRenderPrompt() {
     "Keep the shape unchanged and use a pure black background",
   ].join(", ");
 
+  const waterSplashPrompt = [
+    "Restyle the provided image as a suspended viscous milk splash, high-speed photography, dense creamy liquid, thick flowing ribbons, sculptural splash crowns, glossy white fluid, smooth rounded contours, rich viscosity, crisp fluid detail, high contrast cinematic lighting, no droplets, no colorization",
+    "Keep the shape unchanged and use a pure black background",
+  ].join(", ");
+
+  const supernovaPrompt = [
+    "Colorize the provided image as a biomorphic sculpture with fluid organic form, folded ribbon aesthetic, continuous flowing surfaces, smooth anatomical curvature, layered folds, tensile membrane-like contours, sculpted creases, subtle material depth, elegant museum-scale object design, map the existing shape directly to the folded ribbon structure and organic surface articulation, extreme macro realism",
+    "Keep the shape unchanged and use a pure black background",
+  ].join(", ");
+
   if (renderStyle === "organ") return organPrompt;
   if (renderStyle === "flora") return floraPrompt;
+  if (renderStyle === "powder") return waterSplashPrompt;
+  if (renderStyle === "supernova") return supernovaPrompt;
   return mineralPrompt;
 }
 
