@@ -5,6 +5,7 @@ import { buildRenderCacheKey, RenderQueue } from "./render-queue.js";
 import { playMorphSfx, playRevealSfx, primeSfx, stopAllSfx } from "./sfx.js";
 
 const imageApiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL ?? window.location.origin).trim();
+const captureRequested = new URLSearchParams(window.location.search).get("capture") === "true";
 
 // Clear idb-keyval cache on app start
 idbClear();
@@ -139,6 +140,9 @@ let livePreviewToken = 0;
 let cameraInteracting = false;
 let appMode = getInitialAppMode();
 let forwardedOverlayPointerId = null;
+let captureDirectoryHandle = null;
+let captureInitializationPromise = null;
+let captureWriteQueue = Promise.resolve();
 
 const renderQueue = new RenderQueue({
   concurrency: 3,
@@ -172,6 +176,179 @@ function getRenderCacheKey(dna, rotation, style = renderStyle) {
       quaternion: camera.quaternion,
     },
   });
+}
+
+function cloneVector3(vector) {
+  return { x: vector.x, y: vector.y, z: vector.z };
+}
+
+function cloneQuaternion(quaternion) {
+  return { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w };
+}
+
+function roundCaptureValue(value) {
+  return Number(value.toFixed(3));
+}
+
+function roundCaptureVector3(vector) {
+  return {
+    x: roundCaptureValue(vector.x),
+    y: roundCaptureValue(vector.y),
+    z: roundCaptureValue(vector.z),
+  };
+}
+
+function roundCaptureQuaternion(quaternion) {
+  return {
+    x: roundCaptureValue(quaternion.x),
+    y: roundCaptureValue(quaternion.y),
+    z: roundCaptureValue(quaternion.z),
+    w: roundCaptureValue(quaternion.w),
+  };
+}
+
+function roundCaptureDNA(dna) {
+  return {
+    order: roundCaptureValue(dna.order),
+    warp: roundCaptureValue(dna.warp),
+    fold: roundCaptureValue(dna.fold),
+    spike: roundCaptureValue(dna.spike),
+    chaos: roundCaptureValue(dna.chaos),
+    layers: dna.layers,
+  };
+}
+
+function getCameraState() {
+  return {
+    position: roundCaptureVector3(camera.position),
+    target: roundCaptureVector3(controls.target),
+    quaternion: roundCaptureQuaternion(camera.quaternion),
+  };
+}
+
+function buildCaptureRecord(state) {
+  return {
+    dna: roundCaptureDNA(state.to),
+    rotation: state.revealRotation
+      ? {
+          x: roundCaptureValue(state.revealRotation.x),
+          y: roundCaptureValue(state.revealRotation.y),
+        }
+      : null,
+    camera: state.camera,
+  };
+}
+
+async function computeCaptureHash(input) {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function dataUrlToPngBlob(dataUrl) {
+  const image = new Image();
+  image.decoding = "async";
+  image.src = dataUrl;
+  await image.decode();
+
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Unable to create capture canvas");
+  context.drawImage(image, 0, 0);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Unable to encode capture image as PNG"));
+    }, "image/png");
+  });
+}
+
+async function appendTextFile(directoryHandle, fileName, content) {
+  const fileHandle = await directoryHandle.getFileHandle(fileName, { create: true });
+  const existingFile = await fileHandle.getFile();
+  const writable = await fileHandle.createWritable({ keepExistingData: true });
+
+  try {
+    await writable.seek(existingFile.size);
+    await writable.write(content);
+    await writable.close();
+  } catch (error) {
+    await writable.abort();
+    throw error;
+  }
+}
+
+async function saveCapturedSnapshot(state, imageUrl) {
+  if (!captureRequested || !captureDirectoryHandle || !imageUrl || state.captureSaved) return;
+
+  const hash = await computeCaptureHash(state.renderCacheKeyValue);
+  const imageFile = `${hash}.png`;
+  const record = buildCaptureRecord(state);
+  const imageBlob = await dataUrlToPngBlob(imageUrl);
+  const imageFileHandle = await captureDirectoryHandle.getFileHandle(imageFile, { create: true });
+  const imageWritable = await imageFileHandle.createWritable();
+
+  try {
+    await imageWritable.write(imageBlob);
+    await imageWritable.close();
+    await appendTextFile(captureDirectoryHandle, "index.jsonl", `${JSON.stringify(record)}\n`);
+    state.captureSaved = true;
+  } catch (error) {
+    await imageWritable.abort();
+    throw error;
+  }
+}
+
+function enqueueCapturedSnapshotSave(state, imageUrl) {
+  if (!captureRequested || !captureDirectoryHandle || !imageUrl || state.captureSaved || state.captureQueued) return;
+
+  state.captureQueued = true;
+  captureWriteQueue = captureWriteQueue
+    .then(() => saveCapturedSnapshot(state, imageUrl))
+    .catch((error) => {
+      console.error("Failed to save captured snapshot:", error);
+      setStatusMessage(error instanceof Error ? error.message : "capture save failed");
+    })
+    .finally(() => {
+      state.captureQueued = false;
+    });
+}
+
+async function ensureCaptureDirectoryReady() {
+  if (!captureRequested) return true;
+
+  if (!window.showDirectoryPicker) {
+    setStatusMessage("capture mode requires File System Access API support");
+    return false;
+  }
+
+  if (captureDirectoryHandle) return true;
+  if (captureInitializationPromise) return captureInitializationPromise;
+
+  captureInitializationPromise = (async () => {
+    try {
+      captureDirectoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+      setStatusMessage("capture directory ready");
+      return true;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setStatusMessage("capture directory selection cancelled");
+        return false;
+      }
+
+      console.error("Failed to initialize capture directory:", error);
+      setStatusMessage(error instanceof Error ? error.message : "capture setup failed");
+      return false;
+    } finally {
+      captureInitializationPromise = null;
+    }
+  })();
+
+  return captureInitializationPromise;
 }
 
 function createRenderTask(dna, rotation, style = renderStyle) {
@@ -613,6 +790,13 @@ async function setAppMode(mode) {
   }
 
   if (mode === "demo") {
+    const captureReady = await ensureCaptureDirectoryReady();
+    if (!captureReady) {
+      syncAppModeFromState();
+      syncUI();
+      return;
+    }
+
     mutateOn = true;
     await primeSfx();
     playMorphSfx({
@@ -651,18 +835,24 @@ function queueFutureMutation(now, options = {}) {
   const { prepareImage = mutateOn, style = mutateOn ? getRandomRenderStyle() : renderStyle } = options;
   const seed = getQueueSeed(now);
   const target = randomMutationTarget(APP.dna.ranges);
+  const normalizedRenderStyle = normalizeRenderStyle(style);
+  const revealRotation = getCurrentWorldRotation();
   const queuedState = {
     phase: "queued",
     phaseStart: 0,
     plannedStart: seed.plannedStart,
     from: seed.from,
     to: target,
-    renderStyle: normalizeRenderStyle(style),
-    revealRotation: getCurrentWorldRotation(),
+    renderStyle: normalizedRenderStyle,
+    revealRotation,
     imageUrl: null,
     imageSettled: !prepareImage,
     shouldPrepareImage: prepareImage,
     renderCacheKey: null,
+    renderCacheKeyValue: getRenderCacheKey(target, revealRotation, normalizedRenderStyle),
+    camera: getCameraState(),
+    captureQueued: false,
+    captureSaved: false,
   };
 
   futureMutationQueue.push(queuedState);
@@ -723,7 +913,7 @@ async function prepareBufferedMutationAssets(state) {
     return;
   }
 
-  const key = getRenderCacheKey(state.to, state.revealRotation, state.renderStyle);
+  const key = state.renderCacheKeyValue;
   state.renderCacheKey = key;
 
   renderQueue
@@ -736,6 +926,7 @@ async function prepareBufferedMutationAssets(state) {
       state.renderCacheKey = null;
       state.imageUrl = imageUrl;
       state.imageSettled = true;
+      enqueueCapturedSnapshotSave(state, imageUrl);
       if (state.phase === "awaitingImage") {
         continueAfterHeldMutation(performance.now());
       }
