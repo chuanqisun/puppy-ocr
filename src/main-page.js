@@ -797,13 +797,13 @@ async function requestGeneratedImage(referenceImage, dna) {
   return blobToDataUrl(blob);
 }
 
-async function captureReferenceImageForDNA(dna, rotation) {
-  const snapshotRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-  snapshotRenderer.setSize(APP.api.snapshotSize, APP.api.snapshotSize);
-  snapshotRenderer.setPixelRatio(1);
-  snapshotRenderer.outputColorSpace = THREE.SRGBColorSpace;
-  snapshotRenderer.setClearColor(APP.renderer.clearColor, 1);
+const snapshotRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+snapshotRenderer.setSize(APP.api.snapshotSize, APP.api.snapshotSize);
+snapshotRenderer.setPixelRatio(1);
+snapshotRenderer.outputColorSpace = THREE.SRGBColorSpace;
+snapshotRenderer.setClearColor(APP.renderer.clearColor, 1);
 
+async function captureReferenceImageForDNA(dna, rotation) {
   const snapshotScene = new THREE.Scene();
   const snapshotCamera = new THREE.PerspectiveCamera(APP.camera.fov, 1, APP.camera.near, APP.camera.far);
   snapshotCamera.position.copy(camera.position);
@@ -833,7 +833,6 @@ async function captureReferenceImageForDNA(dna, rotation) {
     if (child.geometry) child.geometry.dispose();
     if (child.material) disposeMaterial(child.material);
   });
-  snapshotRenderer.dispose();
 
   return dataUrl;
 }
