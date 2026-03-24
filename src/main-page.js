@@ -105,11 +105,23 @@ const RENDER_MODE_SEQUENCE = ["point", "mesh", "solid"];
 const APP_MODE_SEQUENCE = ["manual", "preview", "demo"];
 const SPACE_HOLD_DELAY_MS = 180;
 const LIVE_PREVIEW_REFRESH_DELAY_MS = 500;
+const UI_VALUE_FIELDS = ["order", "warp", "fold", "spike", "chaos"];
+const RENDER_MODE_SELECTOR = 'input[name="renderMode"]';
+const RENDER_STYLE_SELECTOR = 'input[name="renderStyle"]';
+const APP_MODE_SELECTOR = "[data-mode]";
 
 const world = new THREE.Group();
 scene.add(world);
 
-const $ = (id) => document.getElementById(id);
+const dom = {
+  apiKey: document.getElementById("apiKey"),
+  hideButton: document.getElementById("hideBtn"),
+  status: document.getElementById("status"),
+  snapshotOverlay: document.getElementById("snapshotOverlay"),
+  snapshotImage: document.getElementById("snapshotImage"),
+  uiShell: document.getElementById("uiShell"),
+  canvas: renderer.domElement,
+};
 
 let mutateOn = false;
 let mutationState = null;
@@ -132,10 +144,7 @@ let livePreviewRefreshTimer = 0;
 let livePreviewToken = 0;
 let cameraInteracting = false;
 let appMode = getInitialAppMode();
-
-function roundForCacheKey(value, precision = 4) {
-  return Number(value.toFixed(precision));
-}
+let forwardedOverlayPointerId = null;
 
 function getCameraCacheState() {
   return {
@@ -205,14 +214,6 @@ async function blobToDataUrl(blob) {
   });
 }
 
-function getSfxIntensity(dna) {
-  return Math.min(1.8, Math.max(0.75, 0.85 + dna.fold * 0.22 + dna.spike * 0.9 + dna.chaos * 0.35));
-}
-
-function getRevealSfxIntensity(dna) {
-  return Math.min(2.1, getSfxIntensity(dna) + 0.35 + dna.fold * 0.12 + dna.chaos * 0.18);
-}
-
 function applyTimingConstants() {
   const root = document.documentElement;
   root.style.setProperty("--snapshot-overlay-fade-in-ms", `${APP.timing.overlayFadeInMs}ms`);
@@ -269,60 +270,58 @@ function setStoredLivePreview(value) {
 
 function setStatusMessage(message) {
   statusMessage = message;
-  $("status").textContent = message || getModeHint();
-}
-
-function getModeHint(mode = appMode) {
-  if (mode === "manual") return "Hold space to render";
-  if (mode === "preview") return "Auto render when you stop";
-  return "";
+  dom.status.textContent = message || getModeHint(appMode);
 }
 
 function syncAppModeFromState() {
   appMode = mutateOn ? "demo" : livePreviewEnabled ? "preview" : "manual";
 }
 
+function syncParameterValueLabels() {
+  UI_VALUE_FIELDS.forEach((id) => {
+    document.getElementById(`${id}Val`).textContent = (+document.getElementById(id).value).toFixed(2);
+  });
+}
+
+function syncCheckedInputs(selector, selectedValue) {
+  document.querySelectorAll(selector).forEach((input) => {
+    input.checked = input.value === selectedValue;
+  });
+}
+
 function syncUI() {
   syncAppModeFromState();
-  $("orderVal").textContent = (+$("order").value).toFixed(2);
-  $("warpVal").textContent = (+$("warp").value).toFixed(2);
-  $("foldVal").textContent = (+$("fold").value).toFixed(2);
-  $("spikeVal").textContent = (+$("spike").value).toFixed(2);
-  $("chaosVal").textContent = (+$("chaos").value).toFixed(2);
-  document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
-    el.checked = el.value === renderMode;
-  });
-  document.querySelectorAll('input[name="renderStyle"]').forEach((el) => {
-    el.checked = el.value === renderStyle;
-  });
-  document.querySelectorAll("[data-mode]").forEach((button) => {
+  syncParameterValueLabels();
+  syncCheckedInputs(RENDER_MODE_SELECTOR, renderMode);
+  syncCheckedInputs(RENDER_STYLE_SELECTOR, renderStyle);
+  document.querySelectorAll(APP_MODE_SELECTOR).forEach((button) => {
     const isActive = button.dataset.mode === appMode;
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
-  $("hideBtn").textContent = menuHidden ? "Show" : "Hide";
-  $("apiKey").value = getStoredApiKey();
-  $("uiShell").classList.toggle("collapsed", menuHidden);
-  $("status").textContent = statusMessage || getModeHint();
+  dom.hideButton.textContent = menuHidden ? "Show" : "Hide";
+  dom.apiKey.value = getStoredApiKey();
+  dom.uiShell.classList.toggle("collapsed", menuHidden);
+  dom.status.textContent = statusMessage || getModeHint(appMode);
 }
 
 function readDNAFromUI() {
   return {
-    order: +$("order").value,
-    warp: +$("warp").value,
-    fold: +$("fold").value,
-    spike: +$("spike").value,
-    chaos: +$("chaos").value,
+    order: +document.getElementById("order").value,
+    warp: +document.getElementById("warp").value,
+    fold: +document.getElementById("fold").value,
+    spike: +document.getElementById("spike").value,
+    chaos: +document.getElementById("chaos").value,
     layers: APP.dna.defaults.layers,
   };
 }
 
 function writeDNAControls(d) {
-  $("order").value = d.order.toFixed(2);
-  $("warp").value = d.warp.toFixed(2);
-  $("fold").value = d.fold.toFixed(2);
-  $("spike").value = d.spike.toFixed(2);
-  $("chaos").value = d.chaos.toFixed(2);
+  document.getElementById("order").value = d.order.toFixed(2);
+  document.getElementById("warp").value = d.warp.toFixed(2);
+  document.getElementById("fold").value = d.fold.toFixed(2);
+  document.getElementById("spike").value = d.spike.toFixed(2);
+  document.getElementById("chaos").value = d.chaos.toFixed(2);
 }
 
 function setDNAValues(d) {
@@ -368,12 +367,6 @@ function getOverlayFadeInDurationMs() {
 
 function getOverlayHoldDurationMs() {
   return APP.timing.overlayHoldMs;
-}
-
-function getNextRenderMode(mode = renderMode) {
-  const currentIndex = RENDER_MODE_SEQUENCE.indexOf(mode);
-  if (currentIndex === -1) return RENDER_MODE_SEQUENCE[0];
-  return RENDER_MODE_SEQUENCE[(currentIndex + 1) % RENDER_MODE_SEQUENCE.length];
 }
 
 function isFormFieldTarget(target) {
@@ -541,17 +534,6 @@ function beginQueuedMutation(now = performance.now(), options = {}) {
   });
   setStatusMessage(getStoredApiKey() ? "animating to buffered target" : "missing api key; animating only");
   return true;
-}
-
-function cloneDNAState(dna) {
-  return {
-    order: dna.order,
-    warp: dna.warp,
-    fold: dna.fold,
-    spike: dna.spike,
-    chaos: dna.chaos,
-    layers: dna.layers,
-  };
 }
 
 function continueAfterHeldMutation(now = performance.now()) {
@@ -916,9 +898,9 @@ async function requestOverlayForState(dna, rotation) {
 }
 
 function showSnapshotOverlay(imageUrl, state = null, status = "fading in generated image") {
-  $("snapshotOverlay").classList.remove("no-transition");
-  $("snapshotImage").src = imageUrl;
-  $("snapshotOverlay").classList.add("visible");
+  dom.snapshotOverlay.classList.remove("no-transition");
+  dom.snapshotImage.src = imageUrl;
+  dom.snapshotOverlay.classList.add("visible");
   playRevealSfx({
     durationMs: getOverlayFadeInDurationMs() + getOverlayHoldDurationMs(),
     intensity: getRevealSfxIntensity(state?.to ?? readDNAFromUI()),
@@ -931,7 +913,7 @@ function showSnapshotOverlay(imageUrl, state = null, status = "fading in generat
 }
 
 function clearSnapshotOverlayAndContinue(state) {
-  const overlay = $("snapshotOverlay");
+  const overlay = dom.snapshotOverlay;
   hideSnapshotOverlay({ immediate: true });
   state.phase = "overlayClearing";
   state.phaseStart = performance.now();
@@ -950,8 +932,8 @@ function clearSnapshotOverlayAndContinue(state) {
 
 function hideSnapshotOverlay(options = {}) {
   const { immediate = false, status = "animating to next target" } = options;
-  const overlay = $("snapshotOverlay");
-  const image = $("snapshotImage");
+  const overlay = dom.snapshotOverlay;
+  const image = dom.snapshotImage;
   if (immediate) overlay.classList.add("no-transition");
   if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src);
   image.removeAttribute("src");
@@ -992,8 +974,63 @@ function releaseHoldOverlay() {
   hideSnapshotOverlay({ immediate: true, status: mutateOn ? "animating to next target" : "" });
 }
 
+function relayOverlayPointerEventToCanvas(event) {
+  if (!dom.snapshotOverlay.classList.contains("visible")) return;
+
+  const forwardedEvent = new PointerEvent(event.type, {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    pointerId: event.pointerId,
+    width: event.width,
+    height: event.height,
+    pressure: event.pressure,
+    tangentialPressure: event.tangentialPressure,
+    tiltX: event.tiltX,
+    tiltY: event.tiltY,
+    twist: event.twist,
+    pointerType: event.pointerType,
+    isPrimary: event.isPrimary,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    screenX: event.screenX,
+    screenY: event.screenY,
+    ctrlKey: event.ctrlKey,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    metaKey: event.metaKey,
+    button: event.button,
+    buttons: event.buttons,
+  });
+
+  dom.canvas.dispatchEvent(forwardedEvent);
+}
+
+function handleOverlayPointerDown(event) {
+  if (event.button !== 0) return;
+  forwardedOverlayPointerId = event.pointerId;
+  event.preventDefault();
+  event.stopPropagation();
+  relayOverlayPointerEventToCanvas(event);
+}
+
+function handleOverlayPointerMove(event) {
+  if (event.pointerId !== forwardedOverlayPointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  relayOverlayPointerEventToCanvas(event);
+}
+
+function handleOverlayPointerEnd(event) {
+  if (event.pointerId !== forwardedOverlayPointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  relayOverlayPointerEventToCanvas(event);
+  forwardedOverlayPointerId = null;
+}
+
 PARAMETER_IDS.forEach((id) => {
-  $(id).addEventListener("input", () => {
+  document.getElementById(id).addEventListener("input", () => {
     if (mutateOn) {
       releaseHoldOverlay();
       stopMutationMode();
@@ -1004,7 +1041,7 @@ PARAMETER_IDS.forEach((id) => {
   });
 });
 
-$("apiKey").addEventListener("input", (event) => {
+dom.apiKey.addEventListener("input", (event) => {
   setStoredApiKey(event.target.value);
   if (mutateOn) {
     releaseHoldOverlay();
@@ -1014,13 +1051,13 @@ $("apiKey").addEventListener("input", (event) => {
   queueLivePreviewRefresh();
 });
 
-document.querySelectorAll("[data-mode]").forEach((button) => {
+document.querySelectorAll(APP_MODE_SELECTOR).forEach((button) => {
   button.addEventListener("click", () => {
     void setAppMode(button.dataset.mode);
   });
 });
 
-document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
+document.querySelectorAll(RENDER_MODE_SELECTOR).forEach((el) => {
   el.addEventListener("change", () => {
     if (el.checked) {
       if (mutateOn) {
@@ -1034,7 +1071,7 @@ document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
   });
 });
 
-document.querySelectorAll('input[name="renderStyle"]').forEach((el) => {
+document.querySelectorAll(RENDER_STYLE_SELECTOR).forEach((el) => {
   el.addEventListener("change", () => {
     if (!el.checked) return;
     if (mutateOn) {
@@ -1047,10 +1084,19 @@ document.querySelectorAll('input[name="renderStyle"]').forEach((el) => {
   });
 });
 
-$("hideBtn").addEventListener("click", () => {
+dom.hideButton.addEventListener("click", () => {
   menuHidden = !menuHidden;
   syncUI();
 });
+
+dom.snapshotImage.draggable = false;
+dom.snapshotImage.addEventListener("dragstart", (event) => {
+  event.preventDefault();
+});
+dom.snapshotImage.addEventListener("pointerdown", handleOverlayPointerDown);
+dom.snapshotImage.addEventListener("pointermove", handleOverlayPointerMove);
+dom.snapshotImage.addEventListener("pointerup", handleOverlayPointerEnd);
+dom.snapshotImage.addEventListener("pointercancel", handleOverlayPointerEnd);
 
 controls.addEventListener("start", () => {
   cameraInteracting = true;
@@ -1147,35 +1193,6 @@ function animate(t) {
 }
 animate(0);
 
-function randomInitialDNA(ranges) {
-  return {
-    order: ranges.order.min + Math.random() * (ranges.order.max - ranges.order.min),
-    warp: ranges.warp.min + Math.random() * (ranges.warp.max - ranges.warp.min),
-    fold: ranges.fold.min + Math.random() * (ranges.fold.max - ranges.fold.min),
-    spike: ranges.spike.min + Math.random() * (ranges.spike.max - ranges.spike.min),
-    chaos: ranges.chaos.min + Math.random() * (ranges.chaos.max - ranges.chaos.min),
-    layers: APP.dna.defaults.layers,
-  };
-}
-
-function randomMutationTarget(ranges) {
-  return {
-    order: ranges.order.min + Math.random() * (ranges.order.max - ranges.order.min),
-    warp: ranges.warp.min + Math.random() * (ranges.warp.max - ranges.warp.min),
-    fold: ranges.fold.min + Math.random() * (ranges.fold.max - ranges.fold.min),
-    spike: ranges.spike.min + Math.random() * (ranges.spike.max - ranges.spike.min),
-    chaos: ranges.chaos.min + Math.random() * (ranges.chaos.max - ranges.chaos.min),
-    layers: APP.dna.defaults.layers,
-  };
-}
-
-function getWorldRotationAtTime(timeMs) {
-  return {
-    x: Math.sin(timeMs * APP.animation.worldRotXFreq) * APP.animation.worldRotXAmp,
-    y: timeMs * APP.animation.worldRotY,
-  };
-}
-
 function pickMineralColorStyle() {
   const mineralColorStyles = [
     { color: "dark red", reference: "ruby" },
@@ -1210,6 +1227,70 @@ function buildRenderPrompt() {
   if (renderStyle === "organ") return organPrompt;
   if (renderStyle === "flora") return floraPrompt;
   return mineralPrompt;
+}
+
+function roundForCacheKey(value, precision = 4) {
+  return Number(value.toFixed(precision));
+}
+
+function getSfxIntensity(dna) {
+  return Math.min(1.8, Math.max(0.75, 0.85 + dna.fold * 0.22 + dna.spike * 0.9 + dna.chaos * 0.35));
+}
+
+function getRevealSfxIntensity(dna) {
+  return Math.min(2.1, getSfxIntensity(dna) + 0.35 + dna.fold * 0.12 + dna.chaos * 0.18);
+}
+
+function getModeHint(mode = appMode) {
+  if (mode === "manual") return "Hold space to render";
+  if (mode === "preview") return "Auto render when you stop";
+  return "";
+}
+
+function getNextRenderMode(mode = renderMode) {
+  const currentIndex = RENDER_MODE_SEQUENCE.indexOf(mode);
+  if (currentIndex === -1) return RENDER_MODE_SEQUENCE[0];
+  return RENDER_MODE_SEQUENCE[(currentIndex + 1) % RENDER_MODE_SEQUENCE.length];
+}
+
+function cloneDNAState(dna) {
+  return {
+    order: dna.order,
+    warp: dna.warp,
+    fold: dna.fold,
+    spike: dna.spike,
+    chaos: dna.chaos,
+    layers: dna.layers,
+  };
+}
+
+function randomInitialDNA(ranges) {
+  return {
+    order: ranges.order.min + Math.random() * (ranges.order.max - ranges.order.min),
+    warp: ranges.warp.min + Math.random() * (ranges.warp.max - ranges.warp.min),
+    fold: ranges.fold.min + Math.random() * (ranges.fold.max - ranges.fold.min),
+    spike: ranges.spike.min + Math.random() * (ranges.spike.max - ranges.spike.min),
+    chaos: ranges.chaos.min + Math.random() * (ranges.chaos.max - ranges.chaos.min),
+    layers: APP.dna.defaults.layers,
+  };
+}
+
+function randomMutationTarget(ranges) {
+  return {
+    order: ranges.order.min + Math.random() * (ranges.order.max - ranges.order.min),
+    warp: ranges.warp.min + Math.random() * (ranges.warp.max - ranges.warp.min),
+    fold: ranges.fold.min + Math.random() * (ranges.fold.max - ranges.fold.min),
+    spike: ranges.spike.min + Math.random() * (ranges.spike.max - ranges.spike.min),
+    chaos: ranges.chaos.min + Math.random() * (ranges.chaos.max - ranges.chaos.min),
+    layers: APP.dna.defaults.layers,
+  };
+}
+
+function getWorldRotationAtTime(timeMs) {
+  return {
+    x: Math.sin(timeMs * APP.animation.worldRotXFreq) * APP.animation.worldRotXAmp,
+    y: timeMs * APP.animation.worldRotY,
+  };
 }
 
 function smoothstep01(t) {

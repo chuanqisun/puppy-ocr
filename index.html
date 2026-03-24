@@ -5,16 +5,56 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>life.config</title>
     <style>
+      :root {
+        --color-page-bg: rgb(0 0 0);
+        --color-text: rgb(255 255 255);
+        --color-text-muted: rgb(255 255 255 / 0.62);
+        --color-text-soft: rgb(255 255 255 / 0.8);
+        --color-text-strong: rgb(255 255 255 / 0.82);
+        --color-panel-bg: rgb(255 255 255 / 0.04);
+        --color-panel-bg-strong: rgb(255 255 255 / 0.06);
+        --color-panel-bg-soft: rgb(255 255 255 / 0.03);
+        --color-border-soft: rgb(255 255 255 / 0.12);
+        --color-border: rgb(255 255 255 / 0.15);
+        --color-border-strong: rgb(255 255 255 / 0.18);
+        --color-grid-line: rgb(255 255 255 / 0.05);
+        --color-mask-solid: rgb(0 0 0 / 1);
+        --color-mask-fade: rgb(0 0 0 / 0.12);
+        --color-surface-inverse: rgb(255 255 255);
+        --color-text-inverse: rgb(0 0 0);
+        --font-ui: Inter, system-ui, sans-serif;
+        --radius-panel: 14px;
+        --radius-control: 10px;
+        --radius-tight: 8px;
+        --radius-segmented: 11px;
+        --space-panel-offset: 14px;
+        --space-panel-padding: 12px;
+        --space-field: 10px;
+        --space-field-tight: 6px;
+        --space-inline: 8px;
+        --space-inline-wide: 12px;
+        --space-button-y: 9px;
+        --space-button-x: 10px;
+        --control-height: 2px;
+        --thumb-size: 12px;
+        --panel-width: 260px;
+        --panel-blur: 10px;
+        --transition-panel: 180ms ease;
+        --transition-overlay: var(--snapshot-overlay-fade-in-ms, 250ms) ease;
+        --grid-size: 32px;
+      }
+
       html,
       body {
         margin: 0;
         width: 100%;
         height: 100%;
         overflow: hidden;
-        background: #000;
-        color: #fff;
-        font-family: Inter, system-ui, sans-serif;
+        background: var(--color-page-bg);
+        color: var(--color-text);
+        font-family: var(--font-ui);
       }
+
       canvas {
         display: block;
         width: 100vw;
@@ -22,129 +62,158 @@
         object-fit: cover;
       }
 
-      .mesh-bg {
+      .scene-grid {
         position: fixed;
         inset: 0;
         pointer-events: none;
         opacity: 0.08;
-        background-image: linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-        background-size: 32px 32px;
-        -webkit-mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0.12) 72%, transparent 100%);
-        mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0.12) 72%, transparent 100%);
+        background-image: linear-gradient(var(--color-grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--color-grid-line) 1px, transparent 1px);
+        background-size: var(--grid-size) var(--grid-size);
+        -webkit-mask-image: radial-gradient(circle at center, var(--color-mask-solid), var(--color-mask-fade) 72%, transparent 100%);
+        mask-image: radial-gradient(circle at center, var(--color-mask-solid), var(--color-mask-fade) 72%, transparent 100%);
       }
 
-      .ui-shell {
+      .panel-shell {
         position: fixed;
-        top: 14px;
-        left: 14px;
+        top: var(--space-panel-offset);
+        left: var(--space-panel-offset);
         z-index: 10;
       }
 
-      .ui {
-        width: 260px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 14px;
-        padding: 12px;
-        backdrop-filter: blur(10px);
-        transition: opacity 180ms ease, transform 180ms ease;
+      .panel {
+        width: var(--panel-width);
+        background: var(--color-panel-bg);
+        border: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-panel);
+        padding: var(--space-panel-padding);
+        backdrop-filter: blur(var(--panel-blur));
+        transition: opacity var(--transition-panel), transform var(--transition-panel);
       }
 
-      .ui-shell.collapsed .ui {
+      .panel-shell.collapsed .panel {
         opacity: 0;
         transform: translateX(0);
         pointer-events: none;
       }
 
-      .ui-shell.collapsed:hover .ui {
+      .panel-shell.collapsed:hover .panel {
         opacity: 1;
         transform: translateX(0);
         pointer-events: auto;
       }
 
-      .title-row {
+      .panel-header,
+      .field-header,
+      .choice-list,
+      .choice-list label {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        margin-bottom: 6px;
       }
 
-      .title {
+      .panel-header,
+      .field-header {
+        justify-content: space-between;
+      }
+
+      .panel-header {
+        margin-bottom: var(--space-field-tight);
+      }
+
+      .panel-title {
         font-size: 12px;
         letter-spacing: 0.18em;
         text-transform: uppercase;
       }
 
-      .hide-btn {
-        flex: 0 0 auto;
-        width: auto;
-        background: transparent;
-        color: rgba(255, 255, 255, 0.8);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        border-radius: 8px;
-        padding: 4px 8px;
-        font-size: 11px;
+      button,
+      input[type="password"] {
+        border-radius: var(--radius-control);
+        font-size: 12px;
+      }
+
+      button {
+        flex: 1;
+        padding: var(--space-button-y) var(--space-button-x);
+        border: none;
+        background: var(--color-surface-inverse);
+        color: var(--color-text-inverse);
         cursor: pointer;
       }
 
-      .control {
-        margin: 10px 0;
+      .button-ghost,
+      .segment-button {
+        background: transparent;
+        color: var(--color-text-soft);
       }
-      .control-head {
-        display: flex;
-        justify-content: space-between;
+
+      .button-ghost {
+        flex: 0 0 auto;
+        width: auto;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-tight);
+        padding: 4px 8px;
         font-size: 11px;
+      }
+
+      .field,
+      .choice-group,
+      .key-field {
+        margin: var(--space-field) 0;
+      }
+
+      .key-field {
+        margin-bottom: var(--space-field-tight);
+      }
+
+      .field-header,
+      .choice-group,
+      .key-field label,
+      .status {
+        font-size: 11px;
+      }
+
+      .field-header,
+      .key-field label {
         margin-bottom: 4px;
       }
 
-      .render-mode-group {
-        margin: 10px 0;
-        font-size: 11px;
-      }
-
-      .mode-group {
+      .mode-switcher {
         margin: 12px 0 10px;
       }
 
-      .mode-split {
+      .segmented-control {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 0;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        border-radius: 11px;
+        border: 1px solid var(--color-border-strong);
+        border-radius: var(--radius-segmented);
         overflow: hidden;
-        background: rgba(255, 255, 255, 0.03);
+        background: var(--color-panel-bg-soft);
       }
 
-      .mode-btn {
+      .segment-button {
         flex: initial;
         border-radius: 0;
         border: 0;
-        border-right: 1px solid rgba(255, 255, 255, 0.14);
-        background: transparent;
-        color: rgba(255, 255, 255, 0.82);
+        border-right: 1px solid var(--color-border);
+        color: var(--color-text-strong);
       }
 
-      .mode-btn:last-child {
+      .segment-button:last-child {
         border-right: 0;
       }
 
-      .mode-btn.active {
-        background: #fff;
-        color: #000;
+      .segment-button.active {
+        background: var(--color-surface-inverse);
+        color: var(--color-text-inverse);
       }
 
-      .radio-row {
-        display: flex;
-        gap: 12px;
-        align-items: center;
+      .choice-list {
+        gap: var(--space-inline-wide);
         flex-wrap: wrap;
       }
 
-      .radio-row label {
-        display: flex;
-        align-items: center;
+      .choice-list label {
         gap: 5px;
         cursor: pointer;
       }
@@ -152,18 +221,18 @@
       input[type="range"] {
         width: 100%;
         appearance: none;
-        height: 2px;
-        background: rgba(255, 255, 255, 0.18);
+        height: var(--control-height);
+        background: var(--color-border-strong);
         outline: none;
       }
 
       input[type="range"]::-webkit-slider-thumb {
         appearance: none;
-        width: 12px;
-        height: 12px;
+        width: var(--thumb-size);
+        height: var(--thumb-size);
         border-radius: 50%;
         border: none;
-        background: #fff;
+        background: var(--color-surface-inverse);
         cursor: pointer;
       }
 
@@ -172,63 +241,18 @@
         cursor: pointer;
       }
 
-      .buttons {
-        display: flex;
-        gap: 8px;
-        margin-top: 12px;
-      }
-
-      button {
-        flex: 1;
-        padding: 9px 10px;
-        border-radius: 10px;
-        border: none;
-        background: #fff;
-        color: #000;
-        font-size: 12px;
-        cursor: pointer;
-      }
-
-      button.alt {
-        background: transparent;
-        color: #fff;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-      }
-
-      .buttons .hide-btn {
-        flex: 0 0 auto;
-        padding: 4px 8px;
-        font-size: 11px;
-        background: transparent;
-        color: rgba(255, 255, 255, 0.8);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-      }
-
-      .api-key-row {
-        margin: 10px 0 6px;
-      }
-
-      .api-key-row label {
-        display: block;
-        margin-bottom: 6px;
-        font-size: 11px;
-      }
-
-      .api-key-input {
+      input[type="password"] {
         box-sizing: border-box;
         width: 100%;
         padding: 8px 10px;
-        border-radius: 10px;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        background: rgba(255, 255, 255, 0.06);
-        color: #fff;
-        font-size: 12px;
+        border: 1px solid var(--color-border);
+        background: var(--color-panel-bg-strong);
+        color: var(--color-text);
       }
 
       .status {
         margin-top: 10px;
-        font-size: 11px;
-        color: rgba(255, 255, 255, 0.62);
+        color: var(--color-text-muted);
         min-height: 1.2em;
       }
 
@@ -241,8 +265,8 @@
         justify-content: center;
         opacity: 0;
         pointer-events: none;
-        transition: opacity var(--snapshot-overlay-fade-in-ms, 250ms) ease;
-        background: #000;
+        transition: opacity var(--transition-overlay);
+        background: var(--color-page-bg);
       }
 
       .snapshot-overlay.no-transition {
@@ -261,77 +285,77 @@
         max-height: 100vh;
         object-fit: cover;
         object-position: center;
-        background: #000;
+        background: var(--color-page-bg);
       }
     </style>
   </head>
   <body>
-    <div class="mesh-bg"></div>
+    <div class="scene-grid"></div>
 
     <div id="snapshotOverlay" class="snapshot-overlay">
       <img id="snapshotImage" alt="AI generated morphology preview" />
     </div>
 
-    <div id="uiShell" class="ui-shell">
-      <div class="ui">
-        <div class="title-row">
-          <div class="title">life.config</div>
-          <button id="hideBtn" class="hide-btn">Hide</button>
+    <div id="uiShell" class="panel-shell">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">life.config</div>
+          <button id="hideBtn" class="button-ghost">Hide</button>
         </div>
 
-        <div class="api-key-row">
+        <div class="key-field">
           <label for="apiKey">Replicate API Key</label>
-          <input id="apiKey" class="api-key-input" type="password" placeholder="Enter Replicate API key" autocomplete="off" spellcheck="false" />
+          <input id="apiKey" type="password" placeholder="Enter Replicate API key" autocomplete="off" spellcheck="false" />
         </div>
 
-        <div class="control">
-          <div class="control-head"><span>Symmetry Order</span><span id="orderVal">6.00</span></div>
+        <div class="field">
+          <div class="field-header"><span>Symmetry Order</span><span id="orderVal">6.00</span></div>
           <input id="order" type="range" min="1" max="8" step="0.01" value="6.00" />
         </div>
 
-        <div class="control">
-          <div class="control-head"><span>Warp</span><span id="warpVal">1.20</span></div>
+        <div class="field">
+          <div class="field-header"><span>Warp</span><span id="warpVal">1.20</span></div>
           <input id="warp" type="range" min="0" max="3" step="0.01" value="1.20" />
         </div>
 
-        <div class="control">
-          <div class="control-head"><span>Fold</span><span id="foldVal">0.68</span></div>
+        <div class="field">
+          <div class="field-header"><span>Fold</span><span id="foldVal">0.68</span></div>
           <input id="fold" type="range" min="0" max="1.6" step="0.01" value="0.68" />
         </div>
 
-        <div class="control">
-          <div class="control-head"><span>Spike</span><span id="spikeVal">0.00</span></div>
+        <div class="field">
+          <div class="field-header"><span>Spike</span><span id="spikeVal">0.00</span></div>
           <input id="spike" type="range" min="0" max="0.5" step="0.01" value="0.00" />
         </div>
 
-        <div class="control">
-          <div class="control-head"><span>Symmetry</span><span id="chaosVal">0.22</span></div>
+        <div class="field">
+          <div class="field-header"><span>Symmetry</span><span id="chaosVal">0.22</span></div>
           <input id="chaos" type="range" min="0" max="1.2" step="0.01" value="0.22" />
         </div>
 
-        <div class="render-mode-group">
-          <span class="render-mode-title">Render Mode</span>
-          <div class="radio-row">
+        <div class="choice-group">
+          <span>Render Mode</span>
+          <div class="choice-list">
             <label><input type="radio" name="renderMode" value="point" checked /> Point</label>
             <label><input type="radio" name="renderMode" value="mesh" /> Mesh</label>
             <label><input type="radio" name="renderMode" value="solid" /> Solid</label>
           </div>
         </div>
 
-        <div class="render-mode-group">
-          <span class="render-mode-title">Style</span>
-          <div class="radio-row">
+        <div class="choice-group">
+          <span>Style</span>
+          <div class="choice-list">
             <label><input type="radio" name="renderStyle" value="illustration" checked /> Mineral</label>
             <label><input type="radio" name="renderStyle" value="organ" /> Organ</label>
             <label><input type="radio" name="renderStyle" value="flora" /> Flora</label>
           </div>
         </div>
 
-        <div class="mode-group">
-          <div class="mode-split" role="group" aria-label="Render mode">
-            <button id="modeManual" class="mode-btn active" type="button" data-mode="manual" aria-pressed="true">Manual</button>
-            <button id="modePreview" class="mode-btn" type="button" data-mode="preview" aria-pressed="false">Preview</button>
-            <button id="modeDemo" class="mode-btn" type="button" data-mode="demo" aria-pressed="false">Demo</button>
+        <div class="mode-switcher">
+          <div class="segmented-control" role="group" aria-label="Render mode">
+            <button id="modeManual" class="segment-button active" type="button" data-mode="manual" aria-pressed="true">Manual</button>
+            <button id="modePreview" class="segment-button" type="button" data-mode="preview" aria-pressed="false">Preview</button>
+            <button id="modeDemo" class="segment-button" type="button" data-mode="demo" aria-pressed="false">Demo</button>
           </div>
         </div>
 
