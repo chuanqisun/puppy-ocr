@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Folding Surface DNA</title>
+    <title>life.config</title>
     <style>
       html,
       body {
@@ -100,9 +100,36 @@
         font-size: 11px;
       }
 
-      .render-mode-title {
-        margin-bottom: 6px;
-        display: block;
+      .mode-group {
+        margin: 12px 0 10px;
+      }
+
+      .mode-split {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 11px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .mode-btn {
+        flex: initial;
+        border-radius: 0;
+        border: 0;
+        border-right: 1px solid rgba(255, 255, 255, 0.14);
+        background: transparent;
+        color: rgba(255, 255, 255, 0.82);
+      }
+
+      .mode-btn:last-child {
+        border-right: 0;
+      }
+
+      .mode-btn.active {
+        background: #fff;
+        color: #000;
       }
 
       .radio-row {
@@ -244,7 +271,7 @@
     <div id="uiShell" class="ui-shell">
       <div class="ui">
         <div class="title-row">
-          <div class="title">Surface DNA</div>
+          <div class="title">life.config</div>
           <button id="hideBtn" class="hide-btn">Hide</button>
         </div>
 
@@ -296,14 +323,12 @@
           </div>
         </div>
 
-        <div class="render-mode-group">
-          <div class="radio-row">
-            <label><input id="livePreview" type="checkbox" /> Live preview</label>
+        <div class="mode-group">
+          <div class="mode-split" role="group" aria-label="Render mode">
+            <button id="modeManual" class="mode-btn active" type="button" data-mode="manual" aria-pressed="true">Manual</button>
+            <button id="modePreview" class="mode-btn" type="button" data-mode="preview" aria-pressed="false">Preview</button>
+            <button id="modeDemo" class="mode-btn" type="button" data-mode="demo" aria-pressed="false">Demo</button>
           </div>
-        </div>
-
-        <div class="buttons">
-          <button id="mutate">Mutate: Off</button>
         </div>
 
         <div id="status" class="status"></div>

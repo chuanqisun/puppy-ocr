@@ -1,7 +1,7 @@
+import { clear as idbClear, get as idbGet, set as idbSet } from "idb-keyval";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { playMorphSfx, playRevealSfx, primeSfx, stopAllSfx } from "./sfx.js";
-import { get as idbGet, set as idbSet, del as idbDel, clear as idbClear } from 'idb-keyval';
 
 const imageApiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL ?? window.location.origin).trim();
 
@@ -100,6 +100,7 @@ fillLight.position.set(-5, -2, 4);
 scene.add(fillLight);
 
 const RENDER_MODE_SEQUENCE = ["point", "mesh", "solid"];
+const APP_MODE_SEQUENCE = ["manual", "preview", "demo"];
 const SPACE_HOLD_DELAY_MS = 180;
 const LIVE_PREVIEW_REFRESH_DELAY_MS = 500;
 
@@ -128,6 +129,7 @@ let autoRotationEnabled = !livePreviewEnabled;
 let livePreviewRefreshTimer = 0;
 let livePreviewToken = 0;
 let cameraInteracting = false;
+let appMode = getInitialAppMode();
 
 function roundForCacheKey(value, precision = 4) {
   return Number(value.toFixed(precision));
@@ -248,6 +250,12 @@ function getStoredLivePreview() {
   return false;
 }
 
+function getInitialAppMode() {
+  if (mutateOn) return "demo";
+  if (livePreviewEnabled) return "preview";
+  return "manual";
+}
+
 function setStoredRenderStyle(value) {
   renderStyle = value === "organ" || value === "flora" ? value : "illustration";
   window.localStorage.setItem(APP.api.renderStyleStorageKey, renderStyle);
@@ -259,27 +267,41 @@ function setStoredLivePreview(value) {
 
 function setStatusMessage(message) {
   statusMessage = message;
-  $("status").textContent = message;
+  $("status").textContent = message || getModeHint();
+}
+
+function getModeHint(mode = appMode) {
+  if (mode === "manual") return "Hold space to render";
+  if (mode === "preview") return "Auto render when you stop";
+  return "";
+}
+
+function syncAppModeFromState() {
+  appMode = mutateOn ? "demo" : livePreviewEnabled ? "preview" : "manual";
 }
 
 function syncUI() {
+  syncAppModeFromState();
   $("orderVal").textContent = (+$("order").value).toFixed(2);
   $("warpVal").textContent = (+$("warp").value).toFixed(2);
   $("foldVal").textContent = (+$("fold").value).toFixed(2);
   $("spikeVal").textContent = (+$("spike").value).toFixed(2);
   $("chaosVal").textContent = (+$("chaos").value).toFixed(2);
-  $("mutate").textContent = mutateOn ? "Mutate: On" : "Mutate: Off";
   document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
     el.checked = el.value === renderMode;
   });
   document.querySelectorAll('input[name="renderStyle"]').forEach((el) => {
     el.checked = el.value === renderStyle;
   });
-  $("livePreview").checked = livePreviewEnabled;
+  document.querySelectorAll("[data-mode]").forEach((button) => {
+    const isActive = button.dataset.mode === appMode;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
   $("hideBtn").textContent = menuHidden ? "Show" : "Hide";
   $("apiKey").value = getStoredApiKey();
   $("uiShell").classList.toggle("collapsed", menuHidden);
-  $("status").textContent = statusMessage;
+  $("status").textContent = statusMessage || getModeHint();
 }
 
 function readDNAFromUI() {
@@ -312,6 +334,7 @@ function stopMutationMode() {
   if (mutationState?.imageUrl) revokeMutationImageUrl(mutationState);
   mutationState = null;
   mutateOn = false;
+  syncAppModeFromState();
   stopAllSfx();
   hideSnapshotOverlay({ immediate: true, status: "" });
 }
@@ -611,6 +634,7 @@ function setLivePreviewEnabled(enabled) {
 
   livePreviewEnabled = enabled;
   setStoredLivePreview(enabled);
+  syncAppModeFromState();
 
   if (enabled) {
     disableAutoRotation();
@@ -619,6 +643,44 @@ function setLivePreviewEnabled(enabled) {
   } else {
     if (!cameraInteracting) enableAutoRotation();
     suspendLivePreview("");
+  }
+
+  syncUI();
+}
+
+async function setAppMode(mode) {
+  if (!APP_MODE_SEQUENCE.includes(mode) || appMode === mode) {
+    syncUI();
+    return;
+  }
+
+  releaseHoldOverlay();
+
+  if (mode !== "demo" && mutateOn) stopMutationMode();
+
+  if (mode !== "preview" && livePreviewEnabled) {
+    livePreviewEnabled = false;
+    setStoredLivePreview(false);
+    suspendLivePreview("");
+  }
+
+  appMode = mode;
+
+  if (mode === "preview") {
+    setLivePreviewEnabled(true);
+    return;
+  }
+
+  if (!cameraInteracting) enableAutoRotation();
+
+  if (mode === "demo") {
+    mutateOn = true;
+    await primeSfx();
+    playMorphSfx({
+      durationMs: getMutationDurationMs(),
+      intensity: getSfxIntensity(readDNAFromUI()),
+    });
+    ensureFutureMutationBuffer(performance.now());
   }
 
   syncUI();
@@ -950,8 +1012,10 @@ $("apiKey").addEventListener("input", (event) => {
   queueLivePreviewRefresh();
 });
 
-$("livePreview").addEventListener("change", (event) => {
-  setLivePreviewEnabled(event.target.checked);
+document.querySelectorAll("[data-mode]").forEach((button) => {
+  button.addEventListener("click", () => {
+    void setAppMode(button.dataset.mode);
+  });
 });
 
 document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
@@ -983,28 +1047,6 @@ document.querySelectorAll('input[name="renderStyle"]').forEach((el) => {
 
 $("hideBtn").addEventListener("click", () => {
   menuHidden = !menuHidden;
-  syncUI();
-});
-
-$("mutate").addEventListener("click", async () => {
-  mutateOn = !mutateOn;
-  releaseHoldOverlay();
-  if (mutateOn) {
-    if (livePreviewEnabled) {
-      livePreviewEnabled = false;
-      setStoredLivePreview(false);
-      suspendLivePreview("");
-    }
-    enableAutoRotation();
-    await primeSfx();
-    playMorphSfx({
-      durationMs: getMutationDurationMs(),
-      intensity: getSfxIntensity(readDNAFromUI()),
-    });
-    ensureFutureMutationBuffer(performance.now());
-  } else {
-    stopMutationMode();
-  }
   syncUI();
 });
 
@@ -1044,9 +1086,11 @@ addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
     if (mutateOn) stopMutationMode();
+    appMode = "manual";
     releaseHoldOverlay();
     if (livePreviewEnabled) suspendLivePreview("animating to buffered target");
     beginQueuedMutation(performance.now(), { shouldLoop: false });
+    syncUI();
     return;
   }
 
@@ -1061,6 +1105,7 @@ addEventListener("keydown", (event) => {
   if (mutateOn) {
     releaseHoldOverlay();
     stopMutationMode();
+    appMode = "manual";
     syncUI();
   }
   clearKeyboardHoldTimer();
