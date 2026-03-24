@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const imageApiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL ?? window.location.origin).trim();
+const PARAMETER_IDS = ["order", "warp", "fold", "spike", "chaos"];
 
 const APP = {
   camera: { fov: 50, near: 0.1, far: 100, position: [0, 0, 20] },
@@ -43,7 +44,7 @@ const APP = {
     worldRotXAmp: 0.06,
   },
   dna: {
-    defaults: { order: 6.0, warp: 1.2, fold: 0.68, spike: 0.0, chaos: 0.22, layers: 3 },
+    defaults: { layers: 3 },
     ranges: {
       order: { min: 1, max: 8, step: 0.01 },
       warp: { min: 0, max: 3, step: 0.01 },
@@ -65,10 +66,17 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, APP.renderer.pixelRatioMax));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.setClearColor(APP.renderer.clearColor, 1);
+renderer.domElement.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+});
+renderer.domElement.addEventListener("pointerdown", (event) => {
+  if (event.pointerType === "mouse") lastPointerButton = event.button;
+});
 document.body.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
+controls.enablePan = false;
 
 const ambient = new THREE.AmbientLight(0xffffff, 0.8);
 scene.add(ambient);
@@ -81,6 +89,9 @@ const fillLight = new THREE.DirectionalLight(0xffffff, 0.7);
 fillLight.position.set(-5, -2, 4);
 scene.add(fillLight);
 
+const RENDER_MODE_SEQUENCE = ["point", "mesh", "solid"];
+const SPACE_HOLD_DELAY_MS = 180;
+
 const world = new THREE.Group();
 scene.add(world);
 
@@ -89,31 +100,20 @@ const $ = (id) => document.getElementById(id);
 let mutateOn = false;
 let mutationState = null;
 const futureMutationQueue = [];
-let renderMode = "solid";
+let renderMode = "point";
 let menuHidden = false;
 let statusMessage = "";
+let rotationPauseStartedAt = null;
+let rotationTimelineOffsetMs = 0;
+let keyboardHoldTimer = 0;
+let keyboardSpacePressed = false;
+let keyboardHoldActive = false;
+let holdOverlayToken = 0;
+let lastPointerButton = null;
 
 function applyTimingConstants() {
   const root = document.documentElement;
   root.style.setProperty("--snapshot-overlay-fade-in-ms", `${APP.timing.overlayFadeInMs}ms`);
-}
-
-function randomInitialDNA(ranges) {
-  return {
-    order: ranges.order.min + Math.random() * (ranges.order.max - ranges.order.min),
-    warp: ranges.warp.min + Math.random() * (ranges.warp.max - ranges.warp.min),
-    fold: ranges.fold.min + Math.random() * (ranges.fold.max - ranges.fold.min),
-    spike: ranges.spike.min + Math.random() * (ranges.spike.max - ranges.spike.min),
-    chaos: ranges.chaos.min + Math.random() * (ranges.chaos.max - ranges.chaos.min),
-    layers: APP.dna.defaults.layers,
-  };
-}
-
-function getWorldRotationAtTime(timeMs) {
-  return {
-    x: Math.sin(timeMs * APP.animation.worldRotXFreq) * APP.animation.worldRotXAmp,
-    y: timeMs * APP.animation.worldRotY,
-  };
 }
 
 function applyGroupRotation(group, rotation) {
@@ -179,6 +179,53 @@ function setDNAValues(d) {
   buildMorphology();
 }
 
+function stopMutationMode() {
+  clearFutureMutationQueue();
+  if (mutationState?.imageUrl) revokeMutationImageUrl(mutationState);
+  mutationState = null;
+  mutateOn = false;
+  hideSnapshotOverlay({ immediate: true, status: "" });
+}
+
+function getCurrentRotationTimelineTime(now = performance.now()) {
+  if (rotationPauseStartedAt !== null) return rotationPauseStartedAt - rotationTimelineOffsetMs;
+  return now - rotationTimelineOffsetMs;
+}
+
+function getMutationDurationMs() {
+  return APP.timing.mutationInterpMs;
+}
+
+function getNextRenderMode(mode = renderMode) {
+  const currentIndex = RENDER_MODE_SEQUENCE.indexOf(mode);
+  if (currentIndex === -1) return RENDER_MODE_SEQUENCE[0];
+  return RENDER_MODE_SEQUENCE[(currentIndex + 1) % RENDER_MODE_SEQUENCE.length];
+}
+
+function isFormFieldTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return Boolean(target.closest("input, textarea, select, button, [contenteditable='true']"));
+}
+
+function adjustMutationTimingForPause(now) {
+  if (rotationPauseStartedAt === null) return;
+  const pausedDuration = now - rotationPauseStartedAt;
+  if (mutationState) mutationState.phaseStart += pausedDuration;
+}
+
+function beginRotationPause(now = performance.now()) {
+  if (rotationPauseStartedAt !== null) return;
+  rotationPauseStartedAt = now;
+}
+
+function endRotationPause(now = performance.now()) {
+  if (rotationPauseStartedAt === null) return;
+  adjustMutationTimingForPause(now);
+  rotationTimelineOffsetMs += now - rotationPauseStartedAt;
+  rotationPauseStartedAt = null;
+}
+
 function getCurrentWorldRotation() {
   return { x: world.rotation.x, y: world.rotation.y };
 }
@@ -189,6 +236,18 @@ function revokeMutationImageUrl(state) {
 
 function clearFutureMutationQueue() {
   while (futureMutationQueue.length) revokeMutationImageUrl(futureMutationQueue.pop());
+}
+
+function clearKeyboardHoldTimer() {
+  if (!keyboardHoldTimer) return;
+  window.clearTimeout(keyboardHoldTimer);
+  keyboardHoldTimer = 0;
+}
+
+function shouldRestartMutationAfterControlEnd() {
+  const shouldRestart = lastPointerButton !== 2;
+  lastPointerButton = null;
+  return shouldRestart;
 }
 
 function disposeMaterial(mat) {
@@ -207,7 +266,7 @@ function clearGroup(group) {
 }
 
 function createLayerObject(geo, mode = renderMode) {
-  if (mode === "points") {
+  if (mode === "point") {
     return new THREE.Points(
       geo,
       new THREE.PointsMaterial({
@@ -255,6 +314,34 @@ function buildMorphology() {
   for (let i = 0; i < d.layers; i++) buildLayer(d, i);
 }
 
+function setRenderMode(mode) {
+  renderMode = mode;
+  syncUI();
+  buildMorphology();
+}
+
+function beginQueuedMutation(now = performance.now(), options = {}) {
+  const { shouldLoop = mutateOn } = options;
+
+  if (mutationState?.imageUrl) revokeMutationImageUrl(mutationState);
+  mutationState = null;
+
+  if (!futureMutationQueue.length) queueFutureMutation(now, { prepareImage: shouldLoop });
+  else if (mutateOn) ensureFutureMutationBuffer(now);
+
+  const nextState = futureMutationQueue.shift();
+  if (!nextState) return false;
+
+  mutationState = nextState;
+  mutationState.phase = "interp";
+  mutationState.phaseStart = now;
+  mutationState.shouldLoop = shouldLoop;
+
+  if (mutateOn) ensureFutureMutationBuffer(now);
+  setStatusMessage(getStoredApiKey() ? "animating to buffered target" : "missing api key; animating only");
+  return true;
+}
+
 function cloneDNAState(dna) {
   return {
     order: dna.order,
@@ -272,7 +359,7 @@ function getQueueSeed(now) {
     return {
       from: cloneDNAState(lastQueuedState.to),
       fromRotation: { ...lastQueuedState.toRotation },
-      plannedStart: lastQueuedState.plannedStart + APP.timing.mutationInterpMs,
+      plannedStart: lastQueuedState.plannedStart + getMutationDurationMs(),
     };
   }
 
@@ -280,7 +367,7 @@ function getQueueSeed(now) {
     return {
       from: cloneDNAState(mutationState.to),
       fromRotation: { ...mutationState.toRotation },
-      plannedStart: mutationState.plannedStart + APP.timing.mutationInterpMs,
+      plannedStart: mutationState.plannedStart + getMutationDurationMs(),
     };
   }
 
@@ -291,7 +378,8 @@ function getQueueSeed(now) {
   };
 }
 
-function queueFutureMutation(now) {
+function queueFutureMutation(now, options = {}) {
+  const { prepareImage = mutateOn } = options;
   const seed = getQueueSeed(now);
   const target = randomMutationTarget(APP.dna.ranges);
   const queuedState = {
@@ -301,14 +389,14 @@ function queueFutureMutation(now) {
     from: seed.from,
     to: target,
     fromRotation: seed.fromRotation,
-    toRotation: getWorldRotationAtTime(seed.plannedStart + APP.timing.mutationInterpMs),
+    toRotation: getWorldRotationAtTime(getCurrentRotationTimelineTime(seed.plannedStart + getMutationDurationMs())),
     imageUrl: null,
-    imageSettled: false,
-    requestToken: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    imageSettled: !prepareImage,
+    shouldPrepareImage: prepareImage,
   };
 
   futureMutationQueue.push(queuedState);
-  prepareBufferedMutationAssets(queuedState);
+  if (prepareImage) prepareBufferedMutationAssets(queuedState);
 }
 
 function ensureFutureMutationBuffer(now = performance.now()) {
@@ -316,18 +404,12 @@ function ensureFutureMutationBuffer(now = performance.now()) {
 }
 
 function startMutationCycle(now) {
-  ensureFutureMutationBuffer(now);
-  if (!futureMutationQueue.length) return;
-
-  mutationState = futureMutationQueue.shift();
-  mutationState.phase = "interp";
-  mutationState.phaseStart = now;
-  setStatusMessage(getStoredApiKey() ? "animating to buffered target" : "missing api key; animating only");
-  ensureFutureMutationBuffer(now);
+  beginQueuedMutation(now, { shouldLoop: true });
 }
 
 function updateMutation(now) {
-  if (!mutateOn) return;
+  if (rotationPauseStartedAt !== null) return;
+  if (!mutateOn && !mutationState) return;
 
   if (!mutationState) {
     startMutationCycle(now);
@@ -337,7 +419,7 @@ function updateMutation(now) {
   const elapsed = now - mutationState.phaseStart;
 
   if (mutationState.phase === "interp") {
-    const t = Math.min(elapsed / APP.timing.mutationInterpMs, 1);
+    const t = Math.min(elapsed / getMutationDurationMs(), 1);
     const e = smoothstep01(t);
 
     setDNAValues(interpolateMutationState(mutationState.from, mutationState.to, e));
@@ -349,8 +431,10 @@ function updateMutation(now) {
       if (mutationState.imageUrl) {
         showSnapshotOverlay(mutationState.imageUrl, mutationState);
       } else if (mutationState.imageSettled) {
+        const shouldLoop = mutationState.shouldLoop;
         mutationState = null;
-        startMutationCycle(now);
+        if (shouldLoop) startMutationCycle(now);
+        else setStatusMessage("loaded next parameter set");
       } else {
         mutationState.phase = "awaitingImage";
         mutationState.phaseStart = now;
@@ -374,6 +458,11 @@ function updateMutation(now) {
 
 async function prepareBufferedMutationAssets(state) {
   try {
+    if (!state.shouldPrepareImage) {
+      state.imageSettled = true;
+      return;
+    }
+
     const apiKey = getStoredApiKey();
     const referenceImage = await captureReferenceImageForDNA(state.to, state.toRotation);
 
@@ -393,8 +482,10 @@ async function prepareBufferedMutationAssets(state) {
           if (imageUrl) {
             showSnapshotOverlay(imageUrl, state);
           } else {
+            const shouldLoop = state.shouldLoop;
             mutationState = null;
-            startMutationCycle(performance.now());
+            if (shouldLoop) startMutationCycle(performance.now());
+            else setStatusMessage("loaded next parameter set");
           }
         }
       })
@@ -404,8 +495,9 @@ async function prepareBufferedMutationAssets(state) {
         console.error("Image request failed:", error);
         setStatusMessage(error instanceof Error ? error.message : "image request failed");
         if (state.phase === "awaitingImage") {
+          const shouldLoop = state.shouldLoop;
           mutationState = null;
-          startMutationCycle(performance.now());
+          if (shouldLoop) startMutationCycle(performance.now());
         }
       });
   } catch (error) {
@@ -424,7 +516,7 @@ async function requestGeneratedImage(referenceImage, dna) {
       "x-api-key": getStoredApiKey(),
     },
     body: JSON.stringify({
-      prompt: buildRenderPrompt(dna),
+      prompt: buildRenderPrompt(),
       referenceImage,
     }),
   });
@@ -444,13 +536,6 @@ async function requestGeneratedImage(referenceImage, dna) {
   return URL.createObjectURL(blob);
 }
 
-function buildRenderPrompt(dna) {
-  return [
-    "Colorize the provided image using pastel cel-shaded sci-fi fantasy illustration with fine line art and a Moebius-inspired graphic aesthetic.",
-    "Keep the shape unchanged and use a pure black background",
-  ].join(", ");
-}
-
 async function captureReferenceImageForDNA(dna, rotation) {
   const snapshotRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   snapshotRenderer.setSize(APP.api.snapshotSize, APP.api.snapshotSize);
@@ -460,7 +545,9 @@ async function captureReferenceImageForDNA(dna, rotation) {
 
   const snapshotScene = new THREE.Scene();
   const snapshotCamera = new THREE.PerspectiveCamera(APP.camera.fov, 1, APP.camera.near, APP.camera.far);
-  snapshotCamera.position.set(...APP.camera.position);
+  snapshotCamera.position.copy(camera.position);
+  snapshotCamera.quaternion.copy(camera.quaternion);
+  snapshotCamera.updateMatrixWorld();
 
   snapshotScene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
@@ -490,13 +577,20 @@ async function captureReferenceImageForDNA(dna, rotation) {
   return dataUrl;
 }
 
-function showSnapshotOverlay(imageUrl, state) {
+async function requestOverlayForState(dna, rotation) {
+  const referenceImage = await captureReferenceImageForDNA(dna, rotation);
+  return getStoredApiKey() ? requestGeneratedImage(referenceImage, dna) : referenceImage;
+}
+
+function showSnapshotOverlay(imageUrl, state = null, status = "fading in generated image") {
   $("snapshotOverlay").classList.remove("no-transition");
   $("snapshotImage").src = imageUrl;
   $("snapshotOverlay").classList.add("visible");
-  state.phase = "overlayFadeIn";
-  state.phaseStart = performance.now();
-  setStatusMessage("fading in generated image");
+  if (state) {
+    state.phase = "overlayFadeIn";
+    state.phaseStart = performance.now();
+  }
+  setStatusMessage(status);
 }
 
 function clearSnapshotOverlayAndContinue(state) {
@@ -509,30 +603,62 @@ function clearSnapshotOverlayAndContinue(state) {
     requestAnimationFrame(() => {
       overlay.classList.remove("no-transition");
       if (!mutateOn || mutationState !== state || state.phase !== "overlayClearing") return;
+      const shouldLoop = state.shouldLoop;
       mutationState = null;
-      startMutationCycle(performance.now());
+      if (shouldLoop) startMutationCycle(performance.now());
+      else setStatusMessage("loaded next parameter set");
     });
   });
 }
 
 function hideSnapshotOverlay(options = {}) {
-  const { immediate = false } = options;
+  const { immediate = false, status = "animating to next target" } = options;
   const overlay = $("snapshotOverlay");
   const image = $("snapshotImage");
   if (immediate) overlay.classList.add("no-transition");
   if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src);
   image.removeAttribute("src");
   overlay.classList.remove("visible");
-  setStatusMessage("animating to next target");
+  setStatusMessage(status);
 }
 
-["order", "warp", "fold", "spike", "chaos"].forEach((id) => {
+function activateHoldOverlay() {
+  const now = performance.now();
+  const overlayToken = ++holdOverlayToken;
+  const heldRotation = getCurrentWorldRotation();
+  const heldDna = cloneDNAState(readDNAFromUI());
+
+  keyboardHoldActive = true;
+  beginRotationPause(now);
+  hideSnapshotOverlay({ immediate: true, status: "capturing held render" });
+
+  requestOverlayForState(heldDna, heldRotation)
+    .then((imageUrl) => {
+      if (!keyboardHoldActive || overlayToken !== holdOverlayToken) {
+        if (typeof imageUrl === "string" && imageUrl.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
+        return;
+      }
+      showSnapshotOverlay(imageUrl, null, "showing held render overlay");
+    })
+    .catch((error) => {
+      if (!keyboardHoldActive || overlayToken !== holdOverlayToken) return;
+      setStatusMessage(error instanceof Error ? error.message : "render overlay failed");
+    });
+}
+
+function releaseHoldOverlay() {
+  if (!keyboardHoldActive) return;
+  keyboardHoldActive = false;
+  holdOverlayToken += 1;
+  endRotationPause(performance.now());
+  hideSnapshotOverlay({ immediate: true, status: mutateOn ? "animating to next target" : "" });
+}
+
+PARAMETER_IDS.forEach((id) => {
   $(id).addEventListener("input", () => {
-    if (["order", "warp", "fold", "spike", "chaos"].includes(id) && mutateOn) {
-      mutateOn = false;
-      mutationState = null;
-      clearFutureMutationQueue();
-      hideSnapshotOverlay();
+    if (mutateOn) {
+      releaseHoldOverlay();
+      stopMutationMode();
     }
     syncUI();
     buildMorphology();
@@ -541,14 +667,22 @@ function hideSnapshotOverlay(options = {}) {
 
 $("apiKey").addEventListener("input", (event) => {
   setStoredApiKey(event.target.value);
+  if (mutateOn) {
+    releaseHoldOverlay();
+    stopMutationMode();
+    syncUI();
+  }
 });
 
 document.querySelectorAll('input[name="renderMode"]').forEach((el) => {
   el.addEventListener("change", () => {
     if (el.checked) {
-      renderMode = el.value;
-      syncUI();
-      buildMorphology();
+      if (mutateOn) {
+        releaseHoldOverlay();
+        stopMutationMode();
+      }
+      releaseHoldOverlay();
+      setRenderMode(el.value);
     }
   });
 });
@@ -560,12 +694,72 @@ $("hideBtn").addEventListener("click", () => {
 
 $("mutate").addEventListener("click", () => {
   mutateOn = !mutateOn;
-  mutationState = null;
-  clearFutureMutationQueue();
-  hideSnapshotOverlay();
+  releaseHoldOverlay();
   if (mutateOn) ensureFutureMutationBuffer(performance.now());
-  else setStatusMessage("");
+  else stopMutationMode();
   syncUI();
+});
+
+controls.addEventListener("end", () => {
+  if (!controls.enabled) return;
+  if (!shouldRestartMutationAfterControlEnd()) return;
+  if (!mutateOn) return;
+  releaseHoldOverlay();
+  stopMutationMode();
+  syncUI();
+});
+
+addEventListener("keydown", (event) => {
+  if (isFormFieldTarget(event.target)) return;
+
+  if (event.key === "Tab") {
+    event.preventDefault();
+    if (mutateOn) stopMutationMode();
+    releaseHoldOverlay();
+    setRenderMode(getNextRenderMode(renderMode));
+    return;
+  }
+
+  if (event.key === "Enter") {
+    event.preventDefault();
+    if (mutateOn) stopMutationMode();
+    releaseHoldOverlay();
+    beginQueuedMutation(performance.now(), { shouldLoop: false });
+    return;
+  }
+
+  if (event.code !== "Space") return;
+  if (event.repeat) {
+    event.preventDefault();
+    return;
+  }
+
+  event.preventDefault();
+  keyboardSpacePressed = true;
+  if (mutateOn) {
+    releaseHoldOverlay();
+    stopMutationMode();
+    syncUI();
+  }
+  clearKeyboardHoldTimer();
+  keyboardHoldTimer = window.setTimeout(() => {
+    if (!keyboardSpacePressed) return;
+    activateHoldOverlay();
+  }, SPACE_HOLD_DELAY_MS);
+});
+
+addEventListener("keyup", (event) => {
+  if (isFormFieldTarget(event.target)) return;
+  if (event.code !== "Space") return;
+
+  event.preventDefault();
+  const wasHolding = keyboardHoldActive;
+  keyboardSpacePressed = false;
+  clearKeyboardHoldTimer();
+
+  if (wasHolding) {
+    releaseHoldOverlay();
+  }
 });
 
 addEventListener("resize", () => {
@@ -582,11 +776,22 @@ buildMorphology();
 function animate(t) {
   requestAnimationFrame(animate);
   updateMutation(t);
-  if (!mutateOn || !mutationState) applyWorldRotation(getWorldRotationAtTime(t));
+  if (!mutateOn || !mutationState) applyWorldRotation(getWorldRotationAtTime(getCurrentRotationTimelineTime(t)));
   controls.update();
   renderer.render(scene, camera);
 }
 animate(0);
+
+function randomInitialDNA(ranges) {
+  return {
+    order: ranges.order.min + Math.random() * (ranges.order.max - ranges.order.min),
+    warp: ranges.warp.min + Math.random() * (ranges.warp.max - ranges.warp.min),
+    fold: ranges.fold.min + Math.random() * (ranges.fold.max - ranges.fold.min),
+    spike: ranges.spike.min + Math.random() * (ranges.spike.max - ranges.spike.min),
+    chaos: ranges.chaos.min + Math.random() * (ranges.chaos.max - ranges.chaos.min),
+    layers: APP.dna.defaults.layers,
+  };
+}
 
 function randomMutationTarget(ranges) {
   return {
@@ -597,6 +802,20 @@ function randomMutationTarget(ranges) {
     chaos: ranges.chaos.min + Math.random() * (ranges.chaos.max - ranges.chaos.min),
     layers: APP.dna.defaults.layers,
   };
+}
+
+function getWorldRotationAtTime(timeMs) {
+  return {
+    x: Math.sin(timeMs * APP.animation.worldRotXFreq) * APP.animation.worldRotXAmp,
+    y: timeMs * APP.animation.worldRotY,
+  };
+}
+
+function buildRenderPrompt() {
+  return [
+    "Colorize the provided image using pastel cel-shaded sci-fi fantasy illustration with fine line art and a Moebius-inspired graphic aesthetic.",
+    "Keep the shape unchanged and use a pure black background",
+  ].join(", ");
 }
 
 function smoothstep01(t) {
@@ -646,7 +865,7 @@ function buildLayerGeometryData(d, layerIndex, meshConfig) {
     const v = y / meshConfig.vSeg;
     const phi = v * Math.PI;
 
-    for (let x = 0; x <= meshConfig.uSeg; x++) {
+    for (let x = 0; x < meshConfig.uSeg; x++) {
       const u = x / meshConfig.uSeg;
       const theta = u * Math.PI * 2;
 
@@ -674,10 +893,15 @@ function buildLayerGeometryData(d, layerIndex, meshConfig) {
 
   for (let y = 0; y < meshConfig.vSeg; y++) {
     for (let x = 0; x < meshConfig.uSeg; x++) {
-      const a = y * (meshConfig.uSeg + 1) + x;
-      const b = a + meshConfig.uSeg + 1;
-      indices.push(a, b, a + 1);
-      indices.push(b, b + 1, a + 1);
+      const rowStart = y * meshConfig.uSeg;
+      const nextRowStart = rowStart + meshConfig.uSeg;
+      const nextX = (x + 1) % meshConfig.uSeg;
+      const a = rowStart + x;
+      const b = nextRowStart + x;
+      const c = rowStart + nextX;
+      const dIndex = nextRowStart + nextX;
+      indices.push(a, b, c);
+      indices.push(b, dIndex, c);
     }
   }
 
