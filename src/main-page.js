@@ -63,14 +63,11 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(APP.camera.fov, innerWidth / innerHeight, APP.camera.near, APP.camera.far);
 camera.position.set(...APP.camera.position);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, APP.renderer.pixelRatioMax));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.setClearColor(APP.renderer.clearColor, 1);
-renderer.domElement.addEventListener("contextmenu", (event) => {
-  event.preventDefault();
-});
 renderer.domElement.addEventListener("pointerdown", (event) => {
   void primeSfx();
   if (event.pointerType === "mouse") lastPointerButton = event.button;
@@ -83,6 +80,7 @@ document.body.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.enablePan = false;
+controls.mouseButtons.RIGHT = null;
 
 const ambient = new THREE.AmbientLight(0xffffff, 0.8);
 scene.add(ambient);
@@ -117,6 +115,7 @@ let keyboardSpacePressed = false;
 let keyboardHoldActive = false;
 let holdOverlayToken = 0;
 let lastPointerButton = null;
+let autoRotationEnabled = true;
 
 function getSfxIntensity(dna) {
   return Math.min(1.8, Math.max(0.75, 0.85 + dna.fold * 0.22 + dna.spike * 0.9 + dna.chaos * 0.35));
@@ -138,6 +137,14 @@ function applyGroupRotation(group, rotation) {
 
 function applyWorldRotation(rotation) {
   applyGroupRotation(world, rotation);
+}
+
+function disableAutoRotation() {
+  autoRotationEnabled = false;
+}
+
+function enableAutoRotation() {
+  autoRotationEnabled = true;
 }
 
 function getStoredApiKey() {
@@ -784,6 +791,7 @@ $("mutate").addEventListener("click", async () => {
   mutateOn = !mutateOn;
   releaseHoldOverlay();
   if (mutateOn) {
+    enableAutoRotation();
     await primeSfx();
     playMorphSfx({
       durationMs: getMutationDurationMs(),
@@ -796,8 +804,13 @@ $("mutate").addEventListener("click", async () => {
   syncUI();
 });
 
+controls.addEventListener("start", () => {
+  disableAutoRotation();
+});
+
 controls.addEventListener("end", () => {
   if (!controls.enabled) return;
+  disableAutoRotation();
   if (!shouldRestartMutationAfterControlEnd()) return;
   if (!mutateOn) return;
   releaseHoldOverlay();
@@ -872,7 +885,9 @@ buildMorphology();
 function animate(t) {
   requestAnimationFrame(animate);
   updateMutation(t);
-  if (!mutateOn || !mutationState) applyWorldRotation(getWorldRotationAtTime(getCurrentRotationTimelineTime(t)));
+  if (autoRotationEnabled && (!mutateOn || !mutationState)) {
+    applyWorldRotation(getWorldRotationAtTime(getCurrentRotationTimelineTime(t)));
+  }
   controls.update();
   renderer.render(scene, camera);
 }
