@@ -26,7 +26,7 @@ const APP = {
     apiKeyStorageKey: "life-config.replicate-api-key",
     livePreviewStorageKey: "life-config.live-preview",
     renderStyleStorageKey: "life-config.render-style",
-    snapshotSize: 768,
+    snapshotSize: 1024,
   },
   mesh: {
     color: 0xffffff,
@@ -65,12 +65,14 @@ const APP = {
 
 const scene = new THREE.Scene();
 
-const camera = new THREE.PerspectiveCamera(APP.camera.fov, innerWidth / innerHeight, APP.camera.near, APP.camera.far);
+const INTRINSIC_SIZE = 2048;
+
+const camera = new THREE.PerspectiveCamera(APP.camera.fov, 1, APP.camera.near, APP.camera.far);
 camera.position.set(...APP.camera.position);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, APP.renderer.pixelRatioMax));
+renderer.setSize(INTRINSIC_SIZE, INTRINSIC_SIZE, false);
+renderer.setPixelRatio(1);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.setClearColor(APP.renderer.clearColor, 1);
 renderer.domElement.addEventListener("pointerdown", (event) => {
@@ -1127,12 +1129,6 @@ addEventListener("keyup", (event) => {
   if (wasHolding) {
     releaseHoldOverlay();
   }
-});
-
-addEventListener("resize", () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
 });
 
 writeDNAControls(randomInitialDNA(APP.dna.ranges));
