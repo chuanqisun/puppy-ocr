@@ -1,6 +1,7 @@
 import { clear as idbClear, get as idbGet, set as idbSet } from "idb-keyval";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { buildRenderCacheKey, RenderQueue } from "./render-queue.js";
 import { playMorphSfx, playRevealSfx, primeSfx, stopAllSfx } from "./sfx.js";
 
 const imageApiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL ?? window.location.origin).trim();
@@ -44,11 +45,6 @@ const APP = {
     rotXStep: 0.19,
     rotYStep: 0.41,
     rotZStep: 0.13,
-  },
-  animation: {
-    worldRotY: 0.00012,
-    worldRotXFreq: 0.00018,
-    worldRotXAmp: 0.06,
   },
   dna: {
     defaults: { layers: 3 },
@@ -131,74 +127,59 @@ let renderMode = "point";
 let renderStyle = getStoredRenderStyle();
 let menuHidden = false;
 let statusMessage = "";
-let rotationPauseStartedAt = null;
-const rotationPauseReasons = new Set();
-let rotationTimelineOffsetMs = 0;
 let keyboardHoldTimer = 0;
 let keyboardSpacePressed = false;
 let keyboardHoldActive = false;
 let holdOverlayToken = 0;
 let lastPointerButton = null;
 let livePreviewEnabled = getStoredLivePreview();
-let autoRotationEnabled = !livePreviewEnabled;
 let livePreviewRefreshTimer = 0;
 let livePreviewToken = 0;
 let cameraInteracting = false;
 let appMode = getInitialAppMode();
 let forwardedOverlayPointerId = null;
 
-function getCameraCacheState() {
-  return {
-    position: {
-      x: roundForCacheKey(camera.position.x),
-      y: roundForCacheKey(camera.position.y),
-      z: roundForCacheKey(camera.position.z),
+const renderQueue = new RenderQueue({
+  concurrency: 3,
+  cache: {
+    get: async (key) => {
+      try {
+        const cached = await idbGet(key);
+        return cached && cached.trim() ? cached : null;
+      } catch {
+        return null;
+      }
     },
-    quaternion: {
-      x: roundForCacheKey(camera.quaternion.x),
-      y: roundForCacheKey(camera.quaternion.y),
-      z: roundForCacheKey(camera.quaternion.z),
-      w: roundForCacheKey(camera.quaternion.w),
+    set: async (key, value) => {
+      try {
+        await idbSet(key, value);
+      } catch (error) {
+        console.warn("Unable to cache render result:", error);
+      }
     },
-  };
-}
+  },
+});
 
-function buildHeldRenderCacheKey(dna, rotation, style = renderStyle, cameraState = getCameraCacheState()) {
-  return JSON.stringify({
-    style,
+function getRenderCacheKey(dna, rotation) {
+  return buildRenderCacheKey({
+    style: renderStyle,
     source: getStoredApiKey() ? "ai" : "reference",
-    dna: {
-      order: roundForCacheKey(dna.order),
-      warp: roundForCacheKey(dna.warp),
-      fold: roundForCacheKey(dna.fold),
-      spike: roundForCacheKey(dna.spike),
-      chaos: roundForCacheKey(dna.chaos),
-      layers: dna.layers,
+    dna,
+    rotation,
+    camera: {
+      position: camera.position,
+      quaternion: camera.quaternion,
     },
-    rotation: {
-      x: roundForCacheKey(rotation.x),
-      y: roundForCacheKey(rotation.y),
-    },
-    camera: cameraState,
   });
 }
 
-async function getHeldRenderCache(key) {
-  try {
-    const cached = await idbGet(key);
-    return cached && cached.trim() ? cached : null;
-  } catch {
-    return null;
-  }
-}
-
-async function setHeldRenderCache(key, imageUrl) {
-  if (!imageUrl) return;
-  try {
-    await idbSet(key, imageUrl);
-  } catch (error) {
-    console.warn("Unable to cache held render result:", error);
-  }
+function createRenderTask(dna, rotation) {
+  return async (signal) => {
+    const referenceImage = await captureReferenceImageForDNA(dna, rotation, getReferenceRenderModeForAi());
+    const apiKey = getStoredApiKey();
+    if (!apiKey) return referenceImage;
+    return requestGeneratedImage(referenceImage, dna, signal);
+  };
 }
 
 async function blobToDataUrl(blob) {
@@ -223,18 +204,6 @@ function applyTimingConstants() {
 function applyGroupRotation(group, rotation) {
   group.rotation.x = rotation.x;
   group.rotation.y = rotation.y;
-}
-
-function applyWorldRotation(rotation) {
-  applyGroupRotation(world, rotation);
-}
-
-function disableAutoRotation() {
-  autoRotationEnabled = false;
-}
-
-function enableAutoRotation() {
-  autoRotationEnabled = true;
 }
 
 function getStoredApiKey() {
@@ -334,16 +303,12 @@ function setDNAValues(d) {
 function stopMutationMode() {
   clearFutureMutationQueue();
   if (mutationState?.imageUrl) revokeMutationImageUrl(mutationState);
+  if (mutationState?.renderCacheKey) renderQueue.cancel(mutationState.renderCacheKey);
   mutationState = null;
   mutateOn = false;
   syncAppModeFromState();
   stopAllSfx();
   hideSnapshotOverlay({ immediate: true, status: "" });
-}
-
-function getCurrentRotationTimelineTime(now = performance.now()) {
-  if (rotationPauseStartedAt !== null) return rotationPauseStartedAt - rotationTimelineOffsetMs;
-  return now - rotationTimelineOffsetMs;
 }
 
 function getMutationDurationMs() {
@@ -376,54 +341,18 @@ function isFormFieldTarget(target) {
   return Boolean(target.closest("input, textarea, select, button, [contenteditable='true']"));
 }
 
-function adjustMutationTimingForPause(now) {
-  if (rotationPauseStartedAt === null) return;
-  const pausedDuration = now - rotationPauseStartedAt;
-  if (mutationState) mutationState.phaseStart += pausedDuration;
-}
-
-function beginRotationPause(now = performance.now()) {
-  pauseRotationFor("keyboardHold", now);
-}
-
-function endRotationPause(reason = "keyboardHold", now = performance.now()) {
-  if (!rotationPauseReasons.has(reason)) return;
-  rotationPauseReasons.delete(reason);
-  if (rotationPauseReasons.size || rotationPauseStartedAt === null) return;
-  adjustMutationTimingForPause(now);
-  rotationTimelineOffsetMs += now - rotationPauseStartedAt;
-  rotationPauseStartedAt = null;
-}
-
-function pauseRotationFor(reason, now = performance.now()) {
-  if (rotationPauseReasons.has(reason)) return;
-  rotationPauseReasons.add(reason);
-  if (rotationPauseStartedAt !== null) return;
-  rotationPauseStartedAt = now;
-}
-
 function getCurrentWorldRotation() {
   return { x: world.rotation.x, y: world.rotation.y };
-}
-
-function getRotationForTimestamp(timeMs) {
-  return getWorldRotationAtTime(getCurrentRotationTimelineTime(timeMs));
 }
 
 function revokeMutationImageUrl(state) {
   if (state?.imageUrl?.startsWith("blob:")) URL.revokeObjectURL(state.imageUrl);
 }
 
-function abortMutationImageRequest(state) {
-  if (!state?.requestController) return;
-  state.requestController.abort();
-  state.requestController = null;
-}
-
 function clearFutureMutationQueue() {
   while (futureMutationQueue.length) {
     const state = futureMutationQueue.pop();
-    abortMutationImageRequest(state);
+    if (state.renderCacheKey) renderQueue.cancel(state.renderCacheKey);
     revokeMutationImageUrl(state);
   }
 }
@@ -531,19 +460,18 @@ function triggerSingleMutationTransition() {
   beginQueuedMutation(performance.now(), {
     shouldLoop: false,
     prepareImage: shouldUseLivePreview,
-    lockRotation: shouldUseLivePreview,
   });
   syncUI();
 }
 
 function beginQueuedMutation(now = performance.now(), options = {}) {
-  const { shouldLoop = mutateOn, prepareImage = shouldLoop, lockRotation = false } = options;
+  const { shouldLoop = mutateOn, prepareImage = shouldLoop } = options;
 
-  abortMutationImageRequest(mutationState);
+  if (mutationState?.renderCacheKey) renderQueue.cancel(mutationState.renderCacheKey);
   if (mutationState?.imageUrl) revokeMutationImageUrl(mutationState);
   mutationState = null;
 
-  if (!futureMutationQueue.length) queueFutureMutation(now, { prepareImage, lockRotation });
+  if (!futureMutationQueue.length) queueFutureMutation(now, { prepareImage });
   else if (mutateOn) ensureFutureMutationBuffer(now);
 
   const nextState = futureMutationQueue.shift();
@@ -587,7 +515,6 @@ function continueAfterHeldMutation(now = performance.now()) {
 
 function suspendLivePreview(status = "") {
   cancelPendingLivePreviewRequest();
-  endRotationPause("livePreview", performance.now());
   hideSnapshotOverlay({ immediate: true, status });
 }
 
@@ -618,7 +545,6 @@ function refreshLivePreview(options = {}) {
           if (typeof imageUrl === "string" && imageUrl.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
           return;
         }
-        pauseRotationFor("livePreview", performance.now());
         showSnapshotOverlay(imageUrl, null, "showing live preview");
       })
       .catch((error) => {
@@ -649,11 +575,9 @@ function setLivePreviewEnabled(enabled) {
   syncAppModeFromState();
 
   if (enabled) {
-    disableAutoRotation();
     releaseHoldOverlay();
     refreshLivePreview();
   } else {
-    disableAutoRotation();
     suspendLivePreview("");
   }
 
@@ -683,10 +607,7 @@ async function setAppMode(mode) {
     return;
   }
 
-  disableAutoRotation();
-
   if (mode === "demo") {
-    if (!cameraInteracting) enableAutoRotation();
     mutateOn = true;
     await primeSfx();
     playMorphSfx({
@@ -722,26 +643,20 @@ function getQueueSeed(now) {
 }
 
 function queueFutureMutation(now, options = {}) {
-  const { prepareImage = mutateOn, lockRotation = false } = options;
+  const { prepareImage = mutateOn } = options;
   const seed = getQueueSeed(now);
   const target = randomMutationTarget(APP.dna.ranges);
-  const lockedRotation = lockRotation ? getCurrentWorldRotation() : null;
-  const fromRotation = lockedRotation ?? getRotationForTimestamp(seed.plannedStart);
-  const toRotation = lockedRotation ?? getRotationForTimestamp(seed.plannedStart + getMutationDurationMs());
-  const holdRotation = lockedRotation ?? getRotationForTimestamp(seed.plannedStart + getMutationRevealDelayMs());
   const queuedState = {
     phase: "queued",
     phaseStart: 0,
     plannedStart: seed.plannedStart,
     from: seed.from,
     to: target,
-    fromRotation,
-    toRotation,
-    holdRotation,
-    revealRotation: holdRotation,
+    revealRotation: getCurrentWorldRotation(),
     imageUrl: null,
     imageSettled: !prepareImage,
     shouldPrepareImage: prepareImage,
+    renderCacheKey: null,
   };
 
   futureMutationQueue.push(queuedState);
@@ -757,7 +672,6 @@ function startMutationCycle(now) {
 }
 
 function updateMutation(now) {
-  if (rotationPauseStartedAt !== null) return;
   if (!mutateOn && !mutationState) return;
 
   if (!mutationState) {
@@ -772,21 +686,15 @@ function updateMutation(now) {
     const e = smoothstep01(t);
 
     setDNAValues(interpolateMutationState(mutationState.from, mutationState.to, e));
-    applyWorldRotation(interpolateWorldRotation(mutationState.fromRotation, mutationState.toRotation, e));
 
     if (t >= 1) {
       setDNAValues(mutationState.to);
-      applyWorldRotation(mutationState.toRotation);
       mutationState.phase = "hold";
       mutationState.phaseStart = now;
-      setStatusMessage(mutationState.imageSettled ? "rotating on mutated form" : "rotating on mutated form while preparing image");
+      setStatusMessage(mutationState.imageSettled ? "holding mutated form" : "holding mutated form while preparing image");
     }
   } else if (mutationState.phase === "hold") {
-    const t = Math.min(elapsed / getMutationHoldDurationMs(), 1);
-    applyWorldRotation(interpolateWorldRotation(mutationState.toRotation, mutationState.holdRotation, t));
-
-    if (t >= 1) {
-      applyWorldRotation(mutationState.holdRotation);
+    if (elapsed >= getMutationHoldDurationMs()) {
       continueAfterHeldMutation(now);
     }
   } else if (mutationState.phase === "awaitingImage") {
@@ -804,58 +712,40 @@ function updateMutation(now) {
 }
 
 async function prepareBufferedMutationAssets(state) {
-  try {
-    if (!state.shouldPrepareImage) {
-      state.imageSettled = true;
-      return;
-    }
-
-    const apiKey = getStoredApiKey();
-    const referenceImage = await captureReferenceImageForDNA(state.to, state.revealRotation, getReferenceRenderModeForAi());
-
-    if (mutationState !== state && !futureMutationQueue.includes(state)) return;
-
-    const requestController = apiKey ? new AbortController() : null;
-    state.requestController = requestController;
-
-    const imagePromise = apiKey ? requestGeneratedImage(referenceImage, state.to, requestController.signal) : Promise.resolve(null);
-
-    imagePromise
-      .then((imageUrl) => {
-        if (mutationState !== state && !futureMutationQueue.includes(state)) {
-          if (imageUrl?.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
-          return;
-        }
-        state.requestController = null;
-        state.imageUrl = imageUrl;
-        state.imageSettled = true;
-        if (state.phase === "awaitingImage") {
-          continueAfterHeldMutation(performance.now());
-        }
-      })
-      .catch((error) => {
-        state.requestController = null;
-        if (mutationState !== state && !futureMutationQueue.includes(state)) return;
-        if (error instanceof DOMException && error.name === "AbortError") {
-          state.imageSettled = true;
-          return;
-        }
-        state.imageSettled = true;
-        console.error("Image request failed:", error);
-        setStatusMessage(error instanceof Error ? error.message : "image request failed");
-        if (state.phase === "awaitingImage") {
-          const shouldLoop = state.shouldLoop;
-          mutationState = null;
-          if (shouldLoop) startMutationCycle(performance.now());
-        }
-      });
-  } catch (error) {
-    if (mutationState !== state && !futureMutationQueue.includes(state)) return;
-    state.requestController = null;
-    console.error("Snapshot capture failed:", error);
+  if (!state.shouldPrepareImage) {
     state.imageSettled = true;
-    setStatusMessage(error instanceof Error ? error.message : "snapshot capture failed");
+    return;
   }
+
+  const key = getRenderCacheKey(state.to, state.revealRotation);
+  state.renderCacheKey = key;
+
+  renderQueue
+    .enqueue(key, createRenderTask(state.to, state.revealRotation))
+    .then((imageUrl) => {
+      if (mutationState !== state && !futureMutationQueue.includes(state)) {
+        if (imageUrl?.startsWith("blob:")) URL.revokeObjectURL(imageUrl);
+        return;
+      }
+      state.renderCacheKey = null;
+      state.imageUrl = imageUrl;
+      state.imageSettled = true;
+      if (state.phase === "awaitingImage") {
+        continueAfterHeldMutation(performance.now());
+      }
+    })
+    .catch((error) => {
+      state.renderCacheKey = null;
+      if (mutationState !== state && !futureMutationQueue.includes(state)) return;
+      state.imageSettled = true;
+      console.error("Image request failed:", error);
+      setStatusMessage(error instanceof Error ? error.message : "image request failed");
+      if (state.phase === "awaitingImage") {
+        const shouldLoop = state.shouldLoop;
+        mutationState = null;
+        if (shouldLoop) startMutationCycle(performance.now());
+      }
+    });
 }
 
 async function requestGeneratedImage(referenceImage, dna, signal) {
@@ -932,14 +822,8 @@ async function captureReferenceImageForDNA(dna, rotation, mode = "solid") {
 }
 
 async function requestOverlayForState(dna, rotation) {
-  const cacheKey = buildHeldRenderCacheKey(dna, rotation);
-  const cachedImage = await getHeldRenderCache(cacheKey);
-  if (cachedImage) return cachedImage;
-
-  const referenceImage = await captureReferenceImageForDNA(dna, rotation, getStoredApiKey() ? getReferenceRenderModeForAi() : "solid");
-  const imageUrl = getStoredApiKey() ? await requestGeneratedImage(referenceImage, dna) : referenceImage;
-  await setHeldRenderCache(cacheKey, imageUrl);
-  return imageUrl;
+  const key = getRenderCacheKey(dna, rotation);
+  return renderQueue.enqueue(key, createRenderTask(dna, rotation));
 }
 
 function showSnapshotOverlay(imageUrl, state = null, status = "fading in generated image") {
@@ -959,6 +843,15 @@ function showSnapshotOverlay(imageUrl, state = null, status = "fading in generat
 
 function clearSnapshotOverlayAndContinue(state) {
   const overlay = dom.snapshotOverlay;
+  const shouldLoop = state.shouldLoop;
+  const keepOverlay = !shouldLoop && livePreviewEnabled && state.imageUrl;
+
+  if (keepOverlay) {
+    mutationState = null;
+    setStatusMessage("showing live preview");
+    return;
+  }
+
   hideSnapshotOverlay({ immediate: true });
   state.phase = "overlayClearing";
   state.phaseStart = performance.now();
@@ -967,7 +860,6 @@ function clearSnapshotOverlayAndContinue(state) {
     requestAnimationFrame(() => {
       overlay.classList.remove("no-transition");
       if (mutationState !== state || state.phase !== "overlayClearing") return;
-      const shouldLoop = state.shouldLoop;
       mutationState = null;
       if (shouldLoop) startMutationCycle(performance.now());
       else if (livePreviewEnabled) refreshLivePreview({ status: "capturing live preview" });
@@ -988,13 +880,11 @@ function hideSnapshotOverlay(options = {}) {
 }
 
 function activateHoldOverlay() {
-  const now = performance.now();
   const overlayToken = ++holdOverlayToken;
   const heldRotation = getCurrentWorldRotation();
   const heldDna = cloneDNAState(readDNAFromUI());
 
   keyboardHoldActive = true;
-  pauseRotationFor("keyboardHold", now);
   hideSnapshotOverlay({ immediate: true, status: "capturing held render" });
 
   requestOverlayForState(heldDna, heldRotation)
@@ -1015,7 +905,6 @@ function releaseHoldOverlay() {
   if (!keyboardHoldActive) return;
   keyboardHoldActive = false;
   holdOverlayToken += 1;
-  endRotationPause("keyboardHold", performance.now());
   stopAllSfx();
   hideSnapshotOverlay({ immediate: true, status: mutateOn ? "animating to next target" : "" });
 }
@@ -1181,14 +1070,12 @@ dom.snapshotImage.addEventListener("wheel", handleOverlayWheel, { passive: false
 
 controls.addEventListener("start", () => {
   cameraInteracting = true;
-  disableAutoRotation();
   if (livePreviewEnabled) suspendLivePreview("");
 });
 
 controls.addEventListener("end", () => {
   cameraInteracting = false;
   if (!controls.enabled) return;
-  disableAutoRotation();
   if (!shouldRestartMutationAfterControlEnd()) return;
   if (!mutateOn) return;
   releaseHoldOverlay();
@@ -1261,9 +1148,6 @@ buildMorphology();
 function animate(t) {
   requestAnimationFrame(animate);
   updateMutation(t);
-  if (autoRotationEnabled && (!mutateOn || !mutationState)) {
-    applyWorldRotation(getWorldRotationAtTime(getCurrentRotationTimelineTime(t)));
-  }
   controls.update();
   renderer.render(scene, camera);
 }
@@ -1315,10 +1199,6 @@ function buildRenderPrompt() {
   if (renderStyle === "powder") return waterSplashPrompt;
   if (renderStyle === "supernova") return supernovaPrompt;
   return mineralPrompt;
-}
-
-function roundForCacheKey(value, precision = 4) {
-  return Number(value.toFixed(precision));
 }
 
 function getSfxIntensity(dna) {
@@ -1374,13 +1254,6 @@ function randomMutationTarget(ranges) {
   };
 }
 
-function getWorldRotationAtTime(timeMs) {
-  return {
-    x: Math.sin(timeMs * APP.animation.worldRotXFreq) * APP.animation.worldRotXAmp,
-    y: timeMs * APP.animation.worldRotY,
-  };
-}
-
 function smoothstep01(t) {
   return t * t * (3 - 2 * t);
 }
@@ -1393,13 +1266,6 @@ function interpolateMutationState(from, to, t) {
     spike: from.spike + (to.spike - from.spike) * t,
     chaos: from.chaos + (to.chaos - from.chaos) * t,
     layers: to.layers,
-  };
-}
-
-function interpolateWorldRotation(from, to, t) {
-  return {
-    x: from.x + (to.x - from.x) * t,
-    y: from.y + (to.y - from.y) * t,
   };
 }
 

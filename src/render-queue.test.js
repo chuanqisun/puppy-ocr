@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildRenderCacheKey, RenderQueue, roundForCacheKey } from "./render-queue.js";
 
 // ---------------------------------------------------------------------------
@@ -81,40 +81,28 @@ describe("buildRenderCacheKey", () => {
   });
 
   it("different style → different key", () => {
-    expect(buildRenderCacheKey(makeInput({ style: "mineral" }))).not.toBe(
-      buildRenderCacheKey(makeInput({ style: "organ" }))
-    );
+    expect(buildRenderCacheKey(makeInput({ style: "mineral" }))).not.toBe(buildRenderCacheKey(makeInput({ style: "organ" })));
   });
 
   it("different source → different key", () => {
-    expect(buildRenderCacheKey(makeInput({ source: "ai" }))).not.toBe(
-      buildRenderCacheKey(makeInput({ source: "reference" }))
-    );
+    expect(buildRenderCacheKey(makeInput({ source: "ai" }))).not.toBe(buildRenderCacheKey(makeInput({ source: "reference" })));
   });
 
   it("different dna parameter → different key", () => {
-    expect(buildRenderCacheKey(makeInput({ dna: { ...baseDna, order: 3.0 } }))).not.toBe(
-      buildRenderCacheKey(makeInput({ dna: { ...baseDna, order: 4.0 } }))
-    );
+    expect(buildRenderCacheKey(makeInput({ dna: { ...baseDna, order: 3.0 } }))).not.toBe(buildRenderCacheKey(makeInput({ dna: { ...baseDna, order: 4.0 } })));
   });
 
   it("different rotation → different key", () => {
-    expect(buildRenderCacheKey(makeInput({ rotation: { x: 0.1, y: 0.2 } }))).not.toBe(
-      buildRenderCacheKey(makeInput({ rotation: { x: 0.3, y: 0.2 } }))
-    );
+    expect(buildRenderCacheKey(makeInput({ rotation: { x: 0.1, y: 0.2 } }))).not.toBe(buildRenderCacheKey(makeInput({ rotation: { x: 0.3, y: 0.2 } })));
   });
 
   it("different camera position → different key", () => {
-    expect(buildRenderCacheKey(makeInput())).not.toBe(
-      buildRenderCacheKey(makeInput({ camera: { ...baseCamera, position: { x: 1, y: 0, z: 30 } } }))
-    );
+    expect(buildRenderCacheKey(makeInput())).not.toBe(buildRenderCacheKey(makeInput({ camera: { ...baseCamera, position: { x: 1, y: 0, z: 30 } } })));
   });
 
   it("different camera quaternion → different key", () => {
     expect(buildRenderCacheKey(makeInput())).not.toBe(
-      buildRenderCacheKey(
-        makeInput({ camera: { ...baseCamera, quaternion: { x: 0.1, y: 0, z: 0, w: 0.995 } } })
-      )
+      buildRenderCacheKey(makeInput({ camera: { ...baseCamera, quaternion: { x: 0.1, y: 0, z: 0, w: 0.995 } } }))
     );
   });
 
@@ -125,9 +113,7 @@ describe("buildRenderCacheKey", () => {
   });
 
   it("rounds rotation values for stable comparison", () => {
-    expect(buildRenderCacheKey(makeInput({ rotation: { x: 0.10001, y: 0.2 } }))).toBe(
-      buildRenderCacheKey(makeInput({ rotation: { x: 0.10002, y: 0.2 } }))
-    );
+    expect(buildRenderCacheKey(makeInput({ rotation: { x: 0.10001, y: 0.2 } }))).toBe(buildRenderCacheKey(makeInput({ rotation: { x: 0.10002, y: 0.2 } })));
   });
 
   it("rounds camera values for stable comparison", () => {
@@ -141,9 +127,7 @@ describe("buildRenderCacheKey", () => {
   });
 
   it("different layers → different key", () => {
-    expect(buildRenderCacheKey(makeInput({ dna: { ...baseDna, layers: 3 } }))).not.toBe(
-      buildRenderCacheKey(makeInput({ dna: { ...baseDna, layers: 4 } }))
-    );
+    expect(buildRenderCacheKey(makeInput({ dna: { ...baseDna, layers: 3 } }))).not.toBe(buildRenderCacheKey(makeInput({ dna: { ...baseDna, layers: 4 } })));
   });
 });
 
@@ -200,10 +184,7 @@ describe("RenderQueue", () => {
     });
 
     it("size reaches zero after all tasks settle", async () => {
-      await Promise.all([
-        queue.enqueue("a", async () => "1"),
-        queue.enqueue("b", async () => "2"),
-      ]);
+      await Promise.all([queue.enqueue("a", async () => "1"), queue.enqueue("b", async () => "2")]);
       expect(queue.size).toBe(0);
       expect(queue.active).toBe(0);
       expect(queue.pending).toBe(0);
