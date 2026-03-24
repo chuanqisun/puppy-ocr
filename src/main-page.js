@@ -26,7 +26,7 @@ const APP = {
     apiKeyStorageKey: "life-config.replicate-api-key",
     livePreviewStorageKey: "life-config.live-preview",
     renderStyleStorageKey: "life-config.render-style",
-    snapshotSize: 1024,
+    snapshotSize: 512,
   },
   mesh: {
     color: 0xffffff,
