@@ -75,28 +75,32 @@ class SfxEngine {
     const intensity = this.#clamp(options.intensity ?? 1, 0.65, 2.2);
     const now = this.ctx.currentTime;
     const surgeSec = Math.max((options.durationMs ?? 1300) / 1000, 0.4);
+    const attackSec = Math.min(0.22, Math.max(surgeSec * 0.22, 0.12));
+    const bloomSec = Math.min(0.54, Math.max(surgeSec * 0.42, 0.26));
     const releaseTime = now + surgeSec;
+    const bridgeGain = 0.56 + intensity * 0.05;
+    const bridgeFilter = 250 + intensity * 55;
 
-    this.#ramp(this.bus.gain, 0.82, now, 0.08);
-    this.#ramp(this.bus.gain, 0.42, now + 0.26, 0.42);
+    this.#ramp(this.bus.gain, 0.68 + intensity * 0.03, now, attackSec);
+    this.#ramp(this.bus.gain, bridgeGain, now + attackSec, bloomSec);
 
-    this.#ramp(this.filter.frequency, 120, now, 0.06, true);
-    this.#ramp(this.filter.frequency, 760 * intensity, now + 0.12, 0.34, true);
-    this.#ramp(this.filter.frequency, 135, releaseTime, 0.46, true);
-    this.#ramp(this.filter.Q, 2.1 + intensity * 0.2, now, 0.14);
-    this.#ramp(this.filter.Q, 1.7, releaseTime, 0.4);
+    this.#ramp(this.filter.frequency, 180, now, 0.1, true);
+    this.#ramp(this.filter.frequency, 520 + intensity * 85, now + attackSec * 0.55, bloomSec, true);
+    this.#ramp(this.filter.frequency, bridgeFilter, releaseTime, Math.max(surgeSec * 0.5, 0.28), true);
+    this.#ramp(this.filter.Q, 1.95 + intensity * 0.12, now, attackSec);
+    this.#ramp(this.filter.Q, 1.72, releaseTime, Math.max(surgeSec * 0.4, 0.22));
 
-    this.#ramp(this.voiceGain.gain, 0.15 * intensity, now, 0.08);
-    this.#ramp(this.voiceGain.gain, 0.09 * intensity, now + 0.3, 0.42);
-    this.#ramp(this.subGain.gain, 0.28 * intensity, now, 0.08);
-    this.#ramp(this.subGain.gain, 0.19 * intensity, now + 0.26, 0.4);
-    this.#ramp(this.motionGain.gain, 0.055 * intensity, now, 0.08);
-    this.#ramp(this.motionGain.gain, 0.024 * intensity, now + 0.34, 0.42);
+    this.#ramp(this.voiceGain.gain, 0.11 * intensity, now, attackSec);
+    this.#ramp(this.voiceGain.gain, 0.095 * intensity, now + attackSec, bloomSec);
+    this.#ramp(this.subGain.gain, 0.23 * intensity, now, attackSec);
+    this.#ramp(this.subGain.gain, 0.2 * intensity, now + attackSec, bloomSec);
+    this.#ramp(this.motionGain.gain, 0.042 * intensity, now, attackSec);
+    this.#ramp(this.motionGain.gain, 0.03 * intensity, now + attackSec, bloomSec);
 
-    this.#ramp(this.motionOscillator.frequency, 2.1, now, 0.12);
-    this.#ramp(this.motionOscillator.frequency, 0.5, now + 0.34, 0.46);
+    this.#ramp(this.motionOscillator.frequency, 1.2, now, attackSec);
+    this.#ramp(this.motionOscillator.frequency, 0.72, now + attackSec, bloomSec);
 
-    this.#applyDetuneSpread(now, 0.1, surgeSec, [-28, 31, -16], [10, 13, -8]);
+    this.#applyDetuneSpread(now, attackSec, surgeSec, [-18, 21, -10], [-10, 12, -5]);
     return true;
   }
 
