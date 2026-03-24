@@ -6,13 +6,17 @@ const imageApiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL ?? window.locat
 const APP = {
   camera: { fov: 50, near: 0.1, far: 100, position: [0, 0, 20] },
   renderer: { clearColor: 0x000000, pixelRatioMax: 2 },
+  timing: {
+    mutationInterpMs: 2000,
+    mutationHoldMs: 1000,
+    overlayFadeInMs: 500,
+    overlayHoldMs: 800,
+  },
   api: {
     baseUrl: imageApiBaseUrl,
     apiKeyStorageKey: "life-config.replicate-api-key",
-    overlayDisplayMs: 500,
     snapshotSize: 768,
   },
-  mutation: { interpMs: 1600, holdMs: 1000 },
   mesh: {
     color: 0xffffff,
     solidOpacity: 1.0,
@@ -84,6 +88,11 @@ let mutationState = null;
 let renderMode = "solid";
 let menuHidden = false;
 let statusMessage = "";
+
+function applyTimingConstants() {
+  const root = document.documentElement;
+  root.style.setProperty("--snapshot-overlay-fade-in-ms", `${APP.timing.overlayFadeInMs}ms`);
+}
 
 function randomInitialDNA(ranges) {
   return {
@@ -271,7 +280,7 @@ function updateMutation(now) {
   }
 
   if (mutationState.phase === "interp") {
-    const t = Math.min(elapsed / APP.mutation.interpMs, 1);
+    const t = Math.min(elapsed / APP.timing.mutationInterpMs, 1);
     const e = smoothstep01(t);
 
     setDNAValues(interpolateMutationState(mutationState.from, mutationState.to, e));
@@ -291,11 +300,16 @@ function updateMutation(now) {
       }
     }
   } else if (mutationState.phase === "hold") {
-    if (elapsed >= APP.mutation.holdMs) startMutationCycle(now);
-  } else if (mutationState.phase === "overlay") {
-    if (elapsed >= APP.api.overlayDisplayMs) {
-      hideSnapshotOverlay();
-      startMutationCycle(now);
+    if (elapsed >= APP.timing.mutationHoldMs) startMutationCycle(now);
+  } else if (mutationState.phase === "overlayFadeIn") {
+    if (elapsed >= APP.timing.overlayFadeInMs) {
+      mutationState.phase = "overlayHold";
+      mutationState.phaseStart = now;
+      setStatusMessage("showing generated image");
+    }
+  } else if (mutationState.phase === "overlayHold") {
+    if (elapsed >= APP.timing.overlayHoldMs) {
+      clearSnapshotOverlayAndContinue(mutationState);
     }
   }
 }
@@ -307,7 +321,7 @@ async function prepareMutationSnapshot(state) {
     const apiKey = getStoredApiKey();
     const interpStart = performance.now();
     state.fromRotation = { x: world.rotation.x, y: world.rotation.y };
-    state.toRotation = getWorldRotationAtTime(interpStart + APP.mutation.interpMs);
+    state.toRotation = getWorldRotationAtTime(interpStart + APP.timing.mutationInterpMs);
     const referenceImage = await captureReferenceImageForDNA(state.to, state.toRotation);
 
     if (mutationState !== state || !mutateOn) return;
@@ -422,18 +436,37 @@ async function captureReferenceImageForDNA(dna, rotation) {
 }
 
 function showSnapshotOverlay(imageUrl, state) {
+  $("snapshotOverlay").classList.remove("no-transition");
   $("snapshotImage").src = imageUrl;
   $("snapshotOverlay").classList.add("visible");
-  state.phase = "overlay";
+  state.phase = "overlayFadeIn";
   state.phaseStart = performance.now();
-  setStatusMessage("showing generated image");
+  setStatusMessage("fading in generated image");
 }
 
-function hideSnapshotOverlay() {
+function clearSnapshotOverlayAndContinue(state) {
+  const overlay = $("snapshotOverlay");
+  hideSnapshotOverlay({ immediate: true });
+  state.phase = "overlayClearing";
+  state.phaseStart = performance.now();
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      overlay.classList.remove("no-transition");
+      if (!mutateOn || mutationState !== state || state.phase !== "overlayClearing") return;
+      startMutationCycle(performance.now());
+    });
+  });
+}
+
+function hideSnapshotOverlay(options = {}) {
+  const { immediate = false } = options;
+  const overlay = $("snapshotOverlay");
   const image = $("snapshotImage");
+  if (immediate) overlay.classList.add("no-transition");
   if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src);
   image.removeAttribute("src");
-  $("snapshotOverlay").classList.remove("visible");
+  overlay.classList.remove("visible");
   setStatusMessage("animating to next target");
 }
 
@@ -483,6 +516,7 @@ addEventListener("resize", () => {
 });
 
 writeDNAControls(randomInitialDNA(APP.dna.ranges));
+applyTimingConstants();
 syncUI();
 buildMorphology();
 

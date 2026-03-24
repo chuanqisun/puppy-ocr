@@ -211,8 +211,12 @@
         justify-content: center;
         opacity: 0;
         pointer-events: none;
-        transition: opacity 140ms ease;
+        transition: opacity var(--snapshot-overlay-fade-in-ms, 250ms) ease;
         background: #000;
+      }
+
+      .snapshot-overlay.no-transition {
+        transition: none;
       }
 
       .snapshot-overlay.visible {
