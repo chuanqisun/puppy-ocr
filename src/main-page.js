@@ -10,7 +10,7 @@ idbClear();
 const PARAMETER_IDS = ["order", "warp", "fold", "spike", "chaos"];
 
 const APP = {
-  camera: { fov: 50, near: 0.1, far: 100, position: [0, 0, 20] },
+  camera: { fov: 50, near: 0.1, far: 100, position: [0, 0, 30] },
   renderer: { clearColor: 0x000000, pixelRatioMax: 2 },
   timing: {
     mutationInterpMs: 2000,
@@ -65,7 +65,7 @@ const APP = {
 
 const scene = new THREE.Scene();
 
-const INTRINSIC_SIZE = 2048;
+const INTRINSIC_SIZE = 3072;
 
 const camera = new THREE.PerspectiveCamera(APP.camera.fov, 1, APP.camera.near, APP.camera.far);
 camera.position.set(...APP.camera.position);
