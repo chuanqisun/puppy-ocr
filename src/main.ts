@@ -25,6 +25,7 @@ type OcrRunSummary = {
 type PageResultRow = {
   setStatus: (value: string) => void;
   setContent: (value: string) => void;
+  setDownloadName: (value: string) => void;
 };
 
 main();
@@ -84,26 +85,26 @@ async function splitAndOcrPdf(file: File, apiKey: string): Promise<OcrRunSummary
   await lastValueFrom(
     from(pageIndices).pipe(
       mergeMap(async (pageIndex) => {
-        pageRows[pageIndex].setStatus("Splitting PDF...");
+        pageRows[pageIndex].setStatus("running");
         const page = await splitPdfPage(sourcePdf, file.name, pageIndex);
+        pageRows[page.pageIndex].setDownloadName(createDownloadFilename(file.name, page.pageNumber, pageCount));
         splitCompleted += 1;
         status.textContent = getProgressMessage(splitCompleted, ocrCompleted, pageCount);
-        pageRows[page.pageIndex].setStatus("Waiting for OCR...");
         return page;
       }),
       mergeMap(async (page) => {
         const pageRow = pageRows[page.pageIndex];
-        pageRow.setStatus("Running OCR...");
+        pageRow.setStatus("running");
 
         try {
           const text = await runOcrRequest(page.file, apiKey);
           pageRow.setContent(text || "[No text returned]");
-          pageRow.setStatus("Complete");
+          pageRow.setStatus("success");
         } catch (error) {
           failedPages += 1;
           const message = error instanceof Error ? error.message : "OCR request failed.";
           pageRow.setContent(message);
-          pageRow.setStatus("Failed");
+          pageRow.setStatus("error");
         } finally {
           ocrCompleted += 1;
           status.textContent = getProgressMessage(splitCompleted, ocrCompleted, pageCount, failedPages);
@@ -161,36 +162,60 @@ function clearResults(): void {
 }
 
 function createPageResultRows(pageCount: number): PageResultRow[] {
-  const rows = Array.from({ length: pageCount }, (_, pageIndex) => createPageResultRow(pageIndex + 1));
+  const rows = Array.from({ length: pageCount }, (_, pageIndex) => createPageResultRow(pageIndex + 1, pageCount));
   clearResults();
   result.append(...rows.map((row) => row.element));
   return rows;
 }
 
-function createPageResultRow(pageNumber: number): PageResultRow & { element: HTMLElement } {
+function createPageResultRow(pageNumber: number, pageCount: number): PageResultRow & { element: HTMLElement } {
   const row = document.createElement("article");
   row.className = "page-result";
 
-  const heading = document.createElement("h3");
-  heading.textContent = `Page ${pageNumber}`;
+  const details = document.createElement("div");
+  details.className = "page-result-details";
 
-  const openButton = document.createElement("button");
-  openButton.type = "button";
-  openButton.textContent = "Open";
-  openButton.disabled = true;
+  const heading = document.createElement("strong");
+  heading.textContent = `Page ${formatPageNumber(pageNumber, pageCount)}`;
 
-  const rowStatus = document.createElement("p");
-  rowStatus.textContent = "Waiting";
+  const rowStatus = document.createElement("span");
+  rowStatus.textContent = "queued";
+
+  details.append(heading, rowStatus);
+
+  const actions = document.createElement("div");
+  actions.className = "page-result-actions";
+
+  const toggleButton = document.createElement("button");
+  toggleButton.type = "button";
+  toggleButton.textContent = "Show";
+  toggleButton.disabled = true;
+
+  const downloadButton = document.createElement("button");
+  downloadButton.type = "button";
+  downloadButton.textContent = "Download";
+  downloadButton.disabled = true;
+
+  actions.append(toggleButton, downloadButton);
 
   const body = document.createElement("pre");
   body.className = "page-result-body";
+  body.hidden = true;
 
   let currentContent = "";
-  openButton.addEventListener("click", () => {
-    openResultInNewTab(`Page ${pageNumber}`, currentContent);
+  let downloadName = "ocr-output.txt";
+
+  toggleButton.addEventListener("click", () => {
+    const shouldShow = body.hidden;
+    body.hidden = !shouldShow;
+    toggleButton.textContent = shouldShow ? "Hide" : "Show";
   });
 
-  row.append(heading, openButton, rowStatus, body);
+  downloadButton.addEventListener("click", () => {
+    downloadTextFile(downloadName, currentContent);
+  });
+
+  row.append(details, actions, body);
 
   return {
     element: row,
@@ -200,7 +225,11 @@ function createPageResultRow(pageNumber: number): PageResultRow & { element: HTM
     setContent(value: string) {
       currentContent = value;
       body.textContent = value;
-      openButton.disabled = false;
+      toggleButton.disabled = false;
+      downloadButton.disabled = false;
+    },
+    setDownloadName(value: string) {
+      downloadName = value;
     },
   };
 }
@@ -224,24 +253,28 @@ function getCompletionMessage(summary: OcrRunSummary): string {
   return `OCR finished with ${summary.failedPages} failed page${summary.failedPages === 1 ? "" : "s"}.`;
 }
 
+function formatPageNumber(pageNumber: number, pageCount: number): string {
+  return String(pageNumber).padStart(String(pageCount).length, "0");
+}
+
+function createDownloadFilename(originalFilename: string, pageNumber: number, pageCount: number): string {
+  const baseName = originalFilename.replace(/\.pdf$/i, "") || "document";
+  return `${baseName}-ocr-${formatPageNumber(pageNumber, pageCount)}.txt`;
+}
+
 function createPageFilename(originalFilename: string, pageNumber: number): string {
   const baseName = originalFilename.replace(/\.pdf$/i, "") || "document";
   return `${baseName}-page-${pageNumber}.pdf`;
 }
 
-function openResultInNewTab(title: string, content: string): void {
-  const page = window.open("", "_blank", "noopener,noreferrer");
-
-  if (!page) {
-    return;
-  }
-
-  page.document.title = title;
-  page.document.body.innerHTML = "";
-
-  const pre = page.document.createElement("pre");
-  pre.textContent = content;
-  page.document.body.append(pre);
+function downloadTextFile(filename: string, content: string): void {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(objectUrl);
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
