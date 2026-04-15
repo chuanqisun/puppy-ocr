@@ -12,7 +12,8 @@
 	},
 	"compatibility_flags": ["nodejs_compat"],
 	"vars": {
-		"OCR_API_URL": "https://89f849v6s7oe6fea.aistudio-app.com/layout-parsing"
+		"OCR_API_URL": "https://89f849v6s7oe6fea.aistudio-app.com/layout-parsing",
+		"OCR_API_V2_JOBS_URL": "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
 	}
 	/**
 	 * Smart Placement

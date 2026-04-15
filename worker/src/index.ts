@@ -96,6 +96,8 @@ type LayoutParsingResponse = {
 
 type WorkerEnv = {
 	OCR_API_URL?: string;
+	OCR_API_V2_JOBS_URL?: string;
+	OCR_POLL_INTERVAL_MS?: string;
 };
 
 type OcrSettings = Record<string, unknown>;
@@ -104,6 +106,47 @@ type OcrUpload = {
 	fileBase64: string;
 	filename: string | null;
 	settings: OcrSettings;
+};
+
+const DEFAULT_OCR_API_V2_JOBS_URL = 'https://paddleocr.aistudio-app.com/api/v2/ocr/jobs';
+const OCR_V2_MODEL = 'PaddleOCR-VL-1.5';
+
+type V2JobStatus =
+	| { state: 'pending' }
+	| { state: 'running'; totalPages: number; extractedPages: number }
+	| { state: 'done'; extractedPages: number; jsonlUrl: string }
+	| { state: 'failed'; errorMsg: string };
+
+type V2JobApiResponse = {
+	data: {
+		state: string;
+		extractProgress?: {
+			totalPages?: number;
+			extractedPages?: number;
+			startTime?: string;
+			endTime?: string;
+		};
+		resultUrl?: {
+			jsonUrl?: string;
+		};
+		errorMsg?: string;
+	};
+};
+
+type V2JobCreateResponse = {
+	data: {
+		jobId: string;
+	};
+};
+
+type JsonlLine = {
+	result?: {
+		layoutParsingResults?: Array<{
+			markdown?: {
+				text?: unknown;
+			};
+		}>;
+	};
 };
 
 function textResponse(text: string, status = 200): Response {
@@ -123,6 +166,226 @@ function extractApiKey(request: Request): string {
 function getOcrApiUrl(env: WorkerEnv): string {
 	return typeof env.OCR_API_URL === 'string' && env.OCR_API_URL.trim() ? env.OCR_API_URL.trim() : DEFAULT_OCR_API_URL;
 }
+
+function getOcrApiV2JobsUrl(env: WorkerEnv): string {
+	return typeof env.OCR_API_V2_JOBS_URL === 'string' && env.OCR_API_V2_JOBS_URL.trim()
+		? env.OCR_API_V2_JOBS_URL.trim()
+		: DEFAULT_OCR_API_V2_JOBS_URL;
+}
+
+function sseEvent(eventType: string, data: unknown): string {
+	return `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+async function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function createV2Job(fileBytes: ArrayBuffer, filename: string, apiKey: string, env: WorkerEnv): Promise<string> {
+	const jobFormData = new FormData();
+	jobFormData.set('file', new File([fileBytes], filename, { type: 'application/pdf' }));
+	jobFormData.set('model', OCR_V2_MODEL);
+	jobFormData.set(
+		'optionalPayload',
+		JSON.stringify({
+			useDocOrientationClassify: false,
+			useDocUnwarping: false,
+			useChartRecognition: false,
+		})
+	);
+
+	const response = await fetch(getOcrApiV2JobsUrl(env), {
+		method: 'POST',
+		headers: {
+			Authorization: `bearer ${apiKey}`,
+		},
+		body: jobFormData,
+	});
+
+	if (!response.ok) {
+		const errorText = await response.text();
+		throw new Error(errorText.trim() || `Job creation failed with status ${response.status}.`);
+	}
+
+	const result = (await response.json()) as V2JobCreateResponse;
+	return result.data.jobId;
+}
+
+async function pollV2JobStatus(jobId: string, apiKey: string, env: WorkerEnv): Promise<V2JobStatus> {
+	const response = await fetch(`${getOcrApiV2JobsUrl(env)}/${jobId}`, {
+		headers: {
+			Authorization: `bearer ${apiKey}`,
+		},
+	});
+
+	if (!response.ok) {
+		throw new Error(`Job status poll failed with status ${response.status}.`);
+	}
+
+	const result = (await response.json()) as V2JobApiResponse;
+	const data = result.data;
+
+	if (data.state === 'pending') {
+		return { state: 'pending' };
+	}
+
+	if (data.state === 'running') {
+		return {
+			state: 'running',
+			totalPages: data.extractProgress?.totalPages ?? 0,
+			extractedPages: data.extractProgress?.extractedPages ?? 0,
+		};
+	}
+
+	if (data.state === 'done') {
+		return {
+			state: 'done',
+			extractedPages: data.extractProgress?.extractedPages ?? 0,
+			jsonlUrl: data.resultUrl?.jsonUrl ?? '',
+		};
+	}
+
+	return {
+		state: 'failed',
+		errorMsg: data.errorMsg ?? 'OCR job failed.',
+	};
+}
+
+async function fetchJsonlPageTexts(jsonlUrl: string): Promise<string[]> {
+	const response = await fetch(jsonlUrl);
+
+	if (!response.ok) {
+		throw new Error(`Failed to fetch OCR results with status ${response.status}.`);
+	}
+
+	const text = await response.text();
+	const pageTexts: string[] = [];
+
+	for (const line of text.split('\n')) {
+		if (!line.trim()) continue;
+
+		try {
+			const lineData = JSON.parse(line) as JsonlLine;
+			const results = lineData.result?.layoutParsingResults;
+
+			if (Array.isArray(results)) {
+				for (const res of results) {
+					pageTexts.push(typeof res.markdown?.text === 'string' ? res.markdown.text.trim() : '');
+				}
+			}
+		} catch {
+			// Skip invalid JSONL lines
+		}
+	}
+
+	return pageTexts;
+}
+
+async function handleOcrStream(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
+	const apiKey = extractApiKey(request);
+
+	if (!apiKey) {
+		return textResponse('Missing API key. Provide it in the x-api-key header.', 401);
+	}
+
+	const contentType = request.headers.get('content-type')?.toLowerCase() ?? '';
+	let fileBytes: ArrayBuffer;
+	let filename = 'document.pdf';
+
+	try {
+		if (contentType.includes('multipart/form-data')) {
+			const formData = await request.formData();
+			const uploadedFile = formData.get('file');
+
+			if (!(uploadedFile instanceof File)) {
+				return textResponse('Missing PDF file. Submit multipart/form-data with a "file" field.', 400);
+			}
+
+			if (uploadedFile.type && uploadedFile.type !== 'application/pdf') {
+				return textResponse('Uploaded file must be a PDF.', 400);
+			}
+
+			fileBytes = await uploadedFile.arrayBuffer();
+			filename = uploadedFile.name || filename;
+		} else if (contentType.includes('application/pdf') || contentType.includes('application/octet-stream')) {
+			fileBytes = await request.arrayBuffer();
+		} else {
+			return textResponse('Unsupported content type. Use multipart/form-data or application/pdf.', 400);
+		}
+
+		if (fileBytes.byteLength === 0) {
+			return textResponse('Uploaded PDF is empty.', 400);
+		}
+	} catch {
+		return textResponse('Failed to read uploaded PDF.', 400);
+	}
+
+	const rawPollInterval = parseInt(env.OCR_POLL_INTERVAL_MS ?? '');
+	const pollIntervalMs = Number.isFinite(rawPollInterval) && rawPollInterval >= 0 ? rawPollInterval : 3000;
+	const encoder = new TextEncoder();
+	const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+	const writer = writable.getWriter();
+
+	function writeEvent(eventType: string, data: unknown): Promise<void> {
+		return writer.write(encoder.encode(sseEvent(eventType, data)));
+	}
+
+	ctx.waitUntil(
+		(async () => {
+			try {
+				const jobId = await createV2Job(fileBytes, filename, apiKey, env);
+
+				let jsonlUrl = '';
+
+				while (true) {
+					await sleep(pollIntervalMs);
+					const status = await pollV2JobStatus(jobId, apiKey, env);
+
+					if (status.state === 'pending') {
+						await writeEvent('progress', { state: 'pending' });
+					} else if (status.state === 'running') {
+						await writeEvent('progress', { state: 'running', totalPages: status.totalPages, extractedPages: status.extractedPages });
+					} else if (status.state === 'done') {
+						await writeEvent('progress', { state: 'done', extractedPages: status.extractedPages });
+						jsonlUrl = status.jsonlUrl;
+						break;
+					} else if (status.state === 'failed') {
+						await writeEvent('error', { message: status.errorMsg });
+						return;
+					}
+				}
+
+				if (!jsonlUrl) {
+					await writeEvent('error', { message: 'OCR job completed but no results URL was returned.' });
+					return;
+				}
+
+				const pageTexts = await fetchJsonlPageTexts(jsonlUrl);
+
+				for (let i = 0; i < pageTexts.length; i++) {
+					await writeEvent('page', { pageNumber: i + 1, text: pageTexts[i] });
+				}
+
+				await writeEvent('done', { pageCount: pageTexts.length });
+			} catch (error) {
+				await writeEvent('error', { message: error instanceof Error ? error.message : 'OCR request failed.' });
+			} finally {
+				await writer.close();
+			}
+		})()
+	);
+
+	return new Response(readable, {
+		status: 200,
+		headers: {
+			'Content-Type': 'text/event-stream',
+			'Cache-Control': 'no-cache',
+			...corsHeaders,
+		},
+	});
+}
+
+
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
 	return Buffer.from(buffer).toString('base64');
@@ -361,7 +624,7 @@ async function handleOcr(request: Request, env: WorkerEnv): Promise<Response> {
 }
 
 export default {
-	async fetch(request, env, _ctx): Promise<Response> {
+	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
 
 		if (request.method === 'OPTIONS') {
@@ -373,6 +636,10 @@ export default {
 
 		if (url.pathname === '/' && request.method === 'GET') {
 			return textResponse('puppy-ocr OCR API is running.');
+		}
+
+		if (url.pathname === '/api/ocr/stream' && request.method === 'POST') {
+			return handleOcrStream(request, env, ctx);
 		}
 
 		if (url.pathname !== '/api/ocr') {
