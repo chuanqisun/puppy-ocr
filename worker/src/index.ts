@@ -14,7 +14,7 @@ const DEFAULT_OCR_SETTINGS = {
 	useSealRecognition: false,
 	useOcrForImageBlock: false,
 	mergeTables: false,
-	relevelTitles: false,
+	relevelTitles: true,
 	layoutShapeMode: 'auto',
 	promptLabel: 'ocr',
 	repetitionPenalty: 1,

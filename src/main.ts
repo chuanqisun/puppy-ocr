@@ -23,6 +23,8 @@ type OcrRunSummary = {
   pageCount: number;
 };
 
+type PageOcrStatus = "queued" | "running" | "success" | "error";
+
 type ResultTable = {
   header: ResultHeaderRow;
   rows: PageResultRow[];
@@ -34,14 +36,16 @@ type ResultHeaderRow = {
 };
 
 type PageResultRow = {
-  setStatus: (value: string) => void;
+  setStatus: (value: PageOcrStatus) => void;
   setContent: (value: string) => void;
   setDownloadName: (value: string) => void;
+  setRetryAction: (value: (() => void | Promise<void>) | null) => void;
   setExpanded: (value: boolean) => void;
   isExpanded: () => boolean;
   hasContent: () => boolean;
   getContent: () => string;
   getPageNumber: () => number;
+  getStatus: () => PageOcrStatus;
 };
 
 main();
@@ -98,11 +102,9 @@ async function splitAndOcrPdf(file: File, apiKey: string): Promise<OcrRunSummary
   const sourcePdf = await PDFDocument.load(await file.arrayBuffer());
   const pageCount = sourcePdf.getPageCount();
   const resultTable = createPageResultRows(pageCount);
-  let splitCompleted = 0;
-  let ocrCompleted = 0;
-  let failedPages = 0;
+  const splitPages = new Array<SplitPageResult>(pageCount);
 
-  resultTable.header.setSummary(getProgressMessage(splitCompleted, ocrCompleted, pageCount));
+  updateResultSummary(resultTable.rows, resultTable.header, pageCount);
 
   const pageIndices = Array.from({ length: pageCount }, (_, pageIndex) => pageIndex);
   await lastValueFrom(
@@ -110,42 +112,60 @@ async function splitAndOcrPdf(file: File, apiKey: string): Promise<OcrRunSummary
       mergeMap(async (pageIndex) => {
         resultTable.rows[pageIndex].setStatus("running");
         const page = await splitPdfPage(sourcePdf, file.name, pageIndex);
+        splitPages[pageIndex] = page;
         resultTable.rows[page.pageIndex].setDownloadName(createDownloadFilename(file.name, page.pageNumber, pageCount));
-        splitCompleted += 1;
-        resultTable.header.setSummary(getProgressMessage(splitCompleted, ocrCompleted, pageCount, failedPages));
+        resultTable.rows[page.pageIndex].setRetryAction(() => retryPageOcr(page.pageIndex, splitPages, resultTable, apiKey, pageCount));
         return page;
       }),
       mergeMap(async (page) => {
-        const pageRow = resultTable.rows[page.pageIndex];
-        pageRow.setStatus("running");
-
-        try {
-          const text = await runOcrRequest(page.file, apiKey);
-          pageRow.setContent(text || "[No text returned]");
-          pageRow.setStatus("success");
-        } catch (error) {
-          failedPages += 1;
-          const message = error instanceof Error ? error.message : "OCR request failed.";
-          pageRow.setContent(message);
-          pageRow.setStatus("error");
-        } finally {
-          ocrCompleted += 1;
-          resultTable.header.setSummary(getProgressMessage(splitCompleted, ocrCompleted, pageCount, failedPages));
-          resultTable.header.syncControls();
-        }
-      }, 3),
+        await processPageOcr(page, resultTable, apiKey, pageCount);
+      }, 10),
       toArray()
     )
   );
 
   const summary = {
-    failedPages,
+    failedPages: countRowsWithStatus(resultTable.rows, "error"),
     pageCount,
   };
 
-  resultTable.header.setSummary(getCompletionMessage(summary));
+  updateResultSummary(resultTable.rows, resultTable.header, pageCount);
 
   return summary;
+}
+
+async function processPageOcr(page: SplitPageResult, resultTable: ResultTable, apiKey: string, pageCount: number): Promise<void> {
+  const pageRow = resultTable.rows[page.pageIndex];
+  pageRow.setStatus("running");
+
+  try {
+    const text = await runOcrRequest(page.file, apiKey);
+    pageRow.setContent(text || "[No text returned]");
+    pageRow.setStatus("success");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "OCR request failed.";
+    pageRow.setContent(message);
+    pageRow.setStatus("error");
+  } finally {
+    updateResultSummary(resultTable.rows, resultTable.header, pageCount);
+    resultTable.header.syncControls();
+  }
+}
+
+async function retryPageOcr(
+  pageIndex: number,
+  splitPages: Array<SplitPageResult | undefined>,
+  resultTable: ResultTable,
+  apiKey: string,
+  pageCount: number
+): Promise<void> {
+  const page = splitPages[pageIndex];
+
+  if (!page) {
+    return;
+  }
+
+  await processPageOcr(page, resultTable, apiKey, pageCount);
 }
 
 async function splitPdfPage(sourcePdf: PDFDocument, originalFilename: string, pageIndex: number): Promise<SplitPageResult> {
@@ -208,7 +228,7 @@ function createResultHeader(pageCount: number, rows: PageResultRow[]): ResultHea
 
   const progress = document.createElement("strong");
   progress.className = "result-header-summary";
-  progress.textContent = getProgressMessage(0, 0, pageCount);
+  progress.textContent = getStatusSummaryMessage(0, 0, pageCount);
 
   const actions = document.createElement("div");
   actions.className = "result-header-actions";
@@ -220,18 +240,11 @@ function createResultHeader(pageCount: number, rows: PageResultRow[]): ResultHea
   downloadCombinedButton.type = "button";
   downloadCombinedButton.textContent = "Download combined";
 
-  const pageNumberLabel = document.createElement("label");
-  pageNumberLabel.className = "result-header-checkbox";
+  const downloadPagedButton = document.createElement("button");
+  downloadPagedButton.type = "button";
+  downloadPagedButton.textContent = "Download paged";
 
-  const includePageNumbersInput = document.createElement("input");
-  includePageNumbersInput.type = "checkbox";
-  includePageNumbersInput.checked = true;
-
-  const pageNumberText = document.createElement("span");
-  pageNumberText.textContent = "Page number";
-
-  pageNumberLabel.append(includePageNumbersInput, pageNumberText);
-  actions.append(toggleAllButton, downloadCombinedButton, pageNumberLabel);
+  actions.append(toggleAllButton, downloadCombinedButton, downloadPagedButton);
   row.append(progress, actions);
 
   toggleAllButton.addEventListener("click", () => {
@@ -241,7 +254,7 @@ function createResultHeader(pageCount: number, rows: PageResultRow[]): ResultHea
   });
 
   downloadCombinedButton.addEventListener("click", () => {
-    const combinedContent = buildCombinedOutput(rows, includePageNumbersInput.checked);
+    const combinedContent = buildCombinedOutput(rows);
 
     if (!combinedContent) {
       return;
@@ -250,10 +263,21 @@ function createResultHeader(pageCount: number, rows: PageResultRow[]): ResultHea
     downloadTextFile("ocr-output.txt", combinedContent);
   });
 
+  downloadPagedButton.addEventListener("click", () => {
+    const pagedContent = buildPagedOutput(rows);
+
+    if (!pagedContent) {
+      return;
+    }
+
+    downloadTextFile("ocr-output-paged.txt", pagedContent);
+  });
+
   function syncControls(): void {
     const hasContent = rows.some((currentRow) => currentRow.hasContent());
     toggleAllButton.disabled = !hasContent;
     downloadCombinedButton.disabled = !hasContent;
+    downloadPagedButton.disabled = !hasContent;
     toggleAllButton.textContent = rows.every((currentRow) => currentRow.isExpanded()) ? "Hide all" : "Show all";
   }
 
@@ -294,7 +318,12 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
   downloadButton.textContent = "Download";
   downloadButton.disabled = true;
 
-  actions.append(toggleButton, downloadButton);
+  const retryButton = document.createElement("button");
+  retryButton.type = "button";
+  retryButton.textContent = "Retry";
+  retryButton.hidden = true;
+
+  actions.append(toggleButton, downloadButton, retryButton);
 
   const body = document.createElement("pre");
   body.className = "page-result-body";
@@ -304,6 +333,8 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
   let downloadName = "ocr-output.txt";
   let expanded = false;
   let contentAvailable = false;
+  let currentStatus: PageOcrStatus = "queued";
+  let retryAction: (() => void | Promise<void>) | null = null;
 
   function syncExpandedState(): void {
     body.hidden = !(contentAvailable && expanded);
@@ -320,12 +351,18 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
     downloadTextFile(downloadName, currentContent);
   });
 
+  retryButton.addEventListener("click", () => {
+    void retryAction?.();
+  });
+
   row.append(details, actions, body);
 
   return {
     element: row,
-    setStatus(value: string) {
+    setStatus(value: PageOcrStatus) {
+      currentStatus = value;
       rowStatus.textContent = formatStatusLabel(value);
+      retryButton.hidden = value !== "error" || retryAction === null;
     },
     setContent(value: string) {
       currentContent = value;
@@ -337,6 +374,10 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
     },
     setDownloadName(value: string) {
       downloadName = value;
+    },
+    setRetryAction(value: (() => void | Promise<void>) | null) {
+      retryAction = value;
+      retryButton.hidden = currentStatus !== "error" || retryAction === null;
     },
     setExpanded(value: boolean) {
       expanded = value;
@@ -353,6 +394,9 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
     },
     getPageNumber() {
       return pageNumber;
+    },
+    getStatus() {
+      return currentStatus;
     },
   };
 }
@@ -376,36 +420,32 @@ function formatStatusLabel(value: string): string {
   return value;
 }
 
-function buildCombinedOutput(rows: PageResultRow[], includePageNumbers: boolean): string {
+function buildCombinedOutput(rows: PageResultRow[]): string {
   return rows
     .filter((row) => row.hasContent())
-    .map((row) => {
-      if (!includePageNumbers) {
-        return row.getContent();
-      }
-
-      return `<!-- Page ${row.getPageNumber()} -->\n${row.getContent()}`;
-    })
+    .map((row) => row.getContent())
     .join("\n\n")
     .trim();
 }
 
-function getProgressMessage(splitCompleted: number, ocrCompleted: number, pageCount: number, failedPages = 0): string {
-  const failureMessage = failedPages === 0 ? "" : ` Failed ${failedPages}.`;
-
-  if (splitCompleted >= pageCount) {
-    return `OCR ${ocrCompleted}/${pageCount} pages ${failureMessage}`;
-  }
-
-  return `Split ${splitCompleted}/${pageCount} pages. OCR ${ocrCompleted}/${pageCount} pages ${failureMessage}`;
+function buildPagedOutput(rows: PageResultRow[]): string {
+  return rows
+    .filter((row) => row.hasContent())
+    .map((row) => `<!-- Page ${row.getPageNumber()} -->\n${row.getContent()}`)
+    .join("\n\n")
+    .trim();
 }
 
-function getCompletionMessage(summary: OcrRunSummary): string {
-  if (summary.failedPages === 0) {
-    return `OCR complete for ${summary.pageCount} page${summary.pageCount === 1 ? "" : "s"}.`;
-  }
+function updateResultSummary(rows: PageResultRow[], header: ResultHeaderRow, pageCount: number): void {
+  header.setSummary(getStatusSummaryMessage(countRowsWithStatus(rows, "success"), countRowsWithStatus(rows, "error"), pageCount));
+}
 
-  return `OCR finished with ${summary.failedPages} failed page${summary.failedPages === 1 ? "" : "s"}.`;
+function countRowsWithStatus(rows: PageResultRow[], status: PageOcrStatus): number {
+  return rows.filter((row) => row.getStatus() === status).length;
+}
+
+function getStatusSummaryMessage(successPages: number, failedPages: number, totalPages: number): string {
+  return `${successPages} success, ${failedPages} error, ${totalPages} total`;
 }
 
 function formatPageNumber(pageNumber: number, pageCount: number): string {
