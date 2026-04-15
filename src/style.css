@@ -58,13 +58,12 @@ button {
 body > header,
 body > main,
 body > footer {
-  width: min(100%, 60rem);
+  width: min(60rem, calc(100% - 1.5rem));
   margin-inline: auto;
-  padding-inline: 0.75rem;
 }
 
-body > header {
-  padding-top: 0.75rem;
+header {
+  margin-top: 1rem;
 }
 
 h1 {
@@ -73,11 +72,6 @@ h1 {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-}
-
-main {
-  padding-top: 0.5rem;
-  padding-bottom: 0.75rem;
 }
 
 form {
@@ -276,11 +270,6 @@ input:disabled {
 }
 
 @media (max-width: 44rem) {
-  body > header,
-  body > main {
-    padding-inline: 0.5rem;
-  }
-
   button {
     width: 100%;
     justify-self: stretch;
