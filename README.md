@@ -1,5 +1,3 @@
-# life.config
+# Puppy OCR
 
-## Development
-
-In URL, add `?capture=true` before enabling demo mode to save all the images and index into a local directory
+Use puppy power to extract ancient Chinese text
