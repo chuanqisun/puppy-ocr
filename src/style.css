@@ -8,11 +8,35 @@ main {
   padding: 0.5rem;
 }
 
+details {
+  display: grid;
+  gap: 0.75rem;
+}
+
+details[open] {
+  padding-bottom: 0.25rem;
+}
+
+.setting-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.setting-copy {
+  font-weight: 400;
+}
+
+.setting-option strong {
+  font-weight: 700;
+}
+
 #result {
   display: grid;
   gap: 0.375rem;
 }
 
+.result-header,
 .page-result {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -21,6 +45,12 @@ main {
   border: 1px solid;
 }
 
+.result-header {
+  align-items: center;
+}
+
+.result-header-actions,
+.result-header-checkbox,
 .page-result-details,
 .page-result-actions {
   display: flex;
@@ -28,8 +58,10 @@ main {
   gap: 0.5rem;
 }
 
+.result-header-actions,
 .page-result-actions {
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .page-result-body {
@@ -37,4 +69,16 @@ main {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .result-header,
+  .page-result {
+    grid-template-columns: 1fr;
+  }
+
+  .result-header-actions,
+  .page-result-actions {
+    justify-content: flex-start;
+  }
 }

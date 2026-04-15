@@ -4,14 +4,13 @@ import "./style.css";
 
 // DOM elements
 const apiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL as string | undefined)?.trim().replace(/\/$/, "") ?? "";
+const apiKeyStorageKey = "puppy-ocr-api-key";
 const apiKeyInput = getRequiredElement<HTMLInputElement>("api-key");
 const fileInput = getRequiredElement<HTMLInputElement>("pdf-file");
 const useDocOrientationClassifyInput = getRequiredElement<HTMLInputElement>("setting-use-doc-orientation-classify");
 const useDocUnwarpingInput = getRequiredElement<HTMLInputElement>("setting-use-doc-unwarping");
 const useLayoutDetectionInput = getRequiredElement<HTMLInputElement>("setting-use-layout-detection");
-const selectedFile = getRequiredElement<HTMLParagraphElement>("selected-file");
 const startButton = getRequiredElement<HTMLButtonElement>("start-ocr");
-const status = getRequiredElement<HTMLParagraphElement>("status");
 const result = getRequiredElement<HTMLDivElement>("result");
 
 type SplitPageResult = {
@@ -31,18 +30,37 @@ type ClientOcrSettings = {
   useLayoutDetection: boolean;
 };
 
+type ResultTable = {
+  header: ResultHeaderRow;
+  rows: PageResultRow[];
+};
+
+type ResultHeaderRow = {
+  setSummary: (value: string) => void;
+  syncControls: () => void;
+};
+
 type PageResultRow = {
   setStatus: (value: string) => void;
   setContent: (value: string) => void;
   setDownloadName: (value: string) => void;
+  setExpanded: (value: boolean) => void;
+  isExpanded: () => boolean;
+  hasContent: () => boolean;
+  getContent: () => string;
+  getPageNumber: () => number;
 };
 
 main();
 async function main() {
+  apiKeyInput.value = loadApiKey();
+  clearResults();
+
+  apiKeyInput.addEventListener("input", () => {
+    saveApiKey(apiKeyInput.value);
+  });
+
   fileInput.addEventListener("change", () => {
-    const file = getSelectedPdf();
-    selectedFile.textContent = file ? `Selected file: ${file.name}` : "No file selected.";
-    status.textContent = file ? "Ready to start OCR." : "Select a PDF to begin.";
     clearResults();
     updateStartButton();
   });
@@ -53,28 +71,26 @@ async function main() {
     const ocrSettings = getClientOcrSettings();
 
     if (!file) {
-      status.textContent = "Choose a PDF file before starting.";
       return;
     }
 
     if (!apiKey) {
-      status.textContent = "Enter an API key before starting.";
+      apiKeyInput.setCustomValidity("Enter an API key before starting.");
+      apiKeyInput.reportValidity();
+      apiKeyInput.setCustomValidity("");
       apiKeyInput.focus();
       return;
     }
 
     startButton.disabled = true;
-    status.textContent = "Uploading PDF and waiting for OCR output...";
     clearResults();
 
     try {
-      const summary = await splitAndOcrPdf(file, apiKey, ocrSettings);
-      status.textContent = getCompletionMessage(summary);
+      await splitAndOcrPdf(file, apiKey, ocrSettings);
     } catch (error) {
       const message = error instanceof Error ? error.message : "OCR request failed.";
       clearResults();
       appendRunError(message);
-      status.textContent = "OCR request failed.";
     } finally {
       updateStartButton();
     }
@@ -84,26 +100,26 @@ async function main() {
 async function splitAndOcrPdf(file: File, apiKey: string, ocrSettings: ClientOcrSettings): Promise<OcrRunSummary> {
   const sourcePdf = await PDFDocument.load(await file.arrayBuffer());
   const pageCount = sourcePdf.getPageCount();
-  const pageRows = createPageResultRows(pageCount);
+  const resultTable = createPageResultRows(pageCount);
   let splitCompleted = 0;
   let ocrCompleted = 0;
   let failedPages = 0;
 
-  status.textContent = `Preparing ${pageCount} page${pageCount === 1 ? "" : "s"} for OCR...`;
+  resultTable.header.setSummary(getProgressMessage(splitCompleted, ocrCompleted, pageCount));
 
   const pageIndices = Array.from({ length: pageCount }, (_, pageIndex) => pageIndex);
   await lastValueFrom(
     from(pageIndices).pipe(
       mergeMap(async (pageIndex) => {
-        pageRows[pageIndex].setStatus("running");
+        resultTable.rows[pageIndex].setStatus("running");
         const page = await splitPdfPage(sourcePdf, file.name, pageIndex);
-        pageRows[page.pageIndex].setDownloadName(createDownloadFilename(file.name, page.pageNumber, pageCount));
+        resultTable.rows[page.pageIndex].setDownloadName(createDownloadFilename(file.name, page.pageNumber, pageCount));
         splitCompleted += 1;
-        status.textContent = getProgressMessage(splitCompleted, ocrCompleted, pageCount);
+        resultTable.header.setSummary(getProgressMessage(splitCompleted, ocrCompleted, pageCount, failedPages));
         return page;
       }),
       mergeMap(async (page) => {
-        const pageRow = pageRows[page.pageIndex];
+        const pageRow = resultTable.rows[page.pageIndex];
         pageRow.setStatus("running");
 
         try {
@@ -117,17 +133,22 @@ async function splitAndOcrPdf(file: File, apiKey: string, ocrSettings: ClientOcr
           pageRow.setStatus("error");
         } finally {
           ocrCompleted += 1;
-          status.textContent = getProgressMessage(splitCompleted, ocrCompleted, pageCount, failedPages);
+          resultTable.header.setSummary(getProgressMessage(splitCompleted, ocrCompleted, pageCount, failedPages));
+          resultTable.header.syncControls();
         }
       }, 3),
       toArray()
     )
   );
 
-  return {
+  const summary = {
     failedPages,
     pageCount,
   };
+
+  resultTable.header.setSummary(getCompletionMessage(summary));
+
+  return summary;
 }
 
 async function splitPdfPage(sourcePdf: PDFDocument, originalFilename: string, pageIndex: number): Promise<SplitPageResult> {
@@ -170,16 +191,86 @@ async function runOcrRequest(file: File, apiKey: string, ocrSettings: ClientOcrS
 
 function clearResults(): void {
   result.replaceChildren();
+  result.hidden = true;
 }
 
-function createPageResultRows(pageCount: number): PageResultRow[] {
-  const rows = Array.from({ length: pageCount }, (_, pageIndex) => createPageResultRow(pageIndex + 1, pageCount));
+function createPageResultRows(pageCount: number): ResultTable {
+  let syncHeaderControls = () => {};
+  const rows = Array.from({ length: pageCount }, (_, pageIndex) => createPageResultRow(pageIndex + 1, pageCount, () => syncHeaderControls()));
   clearResults();
-  result.append(...rows.map((row) => row.element));
-  return rows;
+  const header = createResultHeader(pageCount, rows);
+  syncHeaderControls = header.syncControls;
+  result.hidden = false;
+  result.append(header.element, ...rows.map((row) => row.element));
+  header.syncControls();
+  return { header, rows };
 }
 
-function createPageResultRow(pageNumber: number, pageCount: number): PageResultRow & { element: HTMLElement } {
+function createResultHeader(pageCount: number, rows: PageResultRow[]): ResultHeaderRow & { element: HTMLElement } {
+  const row = document.createElement("article");
+  row.className = "result-header";
+
+  const progress = document.createElement("strong");
+  progress.className = "result-header-summary";
+  progress.textContent = getProgressMessage(0, 0, pageCount);
+
+  const actions = document.createElement("div");
+  actions.className = "result-header-actions";
+
+  const toggleAllButton = document.createElement("button");
+  toggleAllButton.type = "button";
+
+  const downloadCombinedButton = document.createElement("button");
+  downloadCombinedButton.type = "button";
+  downloadCombinedButton.textContent = "Download combined";
+
+  const pageNumberLabel = document.createElement("label");
+  pageNumberLabel.className = "result-header-checkbox";
+
+  const includePageNumbersInput = document.createElement("input");
+  includePageNumbersInput.type = "checkbox";
+  includePageNumbersInput.checked = true;
+
+  const pageNumberText = document.createElement("span");
+  pageNumberText.textContent = "Page number";
+
+  pageNumberLabel.append(includePageNumbersInput, pageNumberText);
+  actions.append(toggleAllButton, downloadCombinedButton, pageNumberLabel);
+  row.append(progress, actions);
+
+  toggleAllButton.addEventListener("click", () => {
+    const shouldExpand = !rows.every((currentRow) => currentRow.isExpanded());
+    rows.forEach((currentRow) => currentRow.setExpanded(shouldExpand));
+    syncControls();
+  });
+
+  downloadCombinedButton.addEventListener("click", () => {
+    const combinedContent = buildCombinedOutput(rows, includePageNumbersInput.checked);
+
+    if (!combinedContent) {
+      return;
+    }
+
+    downloadTextFile("ocr-output.txt", combinedContent);
+  });
+
+  function syncControls(): void {
+    const hasContent = rows.some((currentRow) => currentRow.hasContent());
+    toggleAllButton.disabled = !hasContent;
+    downloadCombinedButton.disabled = !hasContent;
+    toggleAllButton.textContent = rows.every((currentRow) => currentRow.isExpanded()) ? "Hide all" : "Show all";
+  }
+
+  return {
+    element: row,
+    setSummary(value: string) {
+      progress.textContent = value;
+    },
+    syncControls,
+  };
+}
+
+function createPageResultRow(pageNumber: number, pageCount: number, onExpandedChange: () => void): PageResultRow & { element: HTMLElement } {
   const row = document.createElement("article");
   row.className = "page-result";
 
@@ -215,11 +306,18 @@ function createPageResultRow(pageNumber: number, pageCount: number): PageResultR
 
   let currentContent = "";
   let downloadName = "ocr-output.txt";
+  let expanded = false;
+  let contentAvailable = false;
+
+  function syncExpandedState(): void {
+    body.hidden = !(contentAvailable && expanded);
+    toggleButton.textContent = expanded ? "Hide" : "Show";
+  }
 
   toggleButton.addEventListener("click", () => {
-    const shouldShow = body.hidden;
-    body.hidden = !shouldShow;
-    toggleButton.textContent = shouldShow ? "Hide" : "Show";
+    expanded = !expanded;
+    syncExpandedState();
+    onExpandedChange();
   });
 
   downloadButton.addEventListener("click", () => {
@@ -236,11 +334,29 @@ function createPageResultRow(pageNumber: number, pageCount: number): PageResultR
     setContent(value: string) {
       currentContent = value;
       body.textContent = value;
+      contentAvailable = true;
       toggleButton.disabled = false;
       downloadButton.disabled = false;
+      syncExpandedState();
     },
     setDownloadName(value: string) {
       downloadName = value;
+    },
+    setExpanded(value: boolean) {
+      expanded = value;
+      syncExpandedState();
+    },
+    isExpanded() {
+      return expanded;
+    },
+    hasContent() {
+      return contentAvailable;
+    },
+    getContent() {
+      return currentContent;
+    },
+    getPageNumber() {
+      return pageNumber;
     },
   };
 }
@@ -248,11 +364,31 @@ function createPageResultRow(pageNumber: number, pageCount: number): PageResultR
 function appendRunError(message: string): void {
   const errorMessage = document.createElement("p");
   errorMessage.textContent = message;
+  result.hidden = false;
   result.append(errorMessage);
+}
+
+function buildCombinedOutput(rows: PageResultRow[], includePageNumbers: boolean): string {
+  return rows
+    .filter((row) => row.hasContent())
+    .map((row) => {
+      if (!includePageNumbers) {
+        return row.getContent();
+      }
+
+      return `<!-- Page ${row.getPageNumber()} -->\n${row.getContent()}`;
+    })
+    .join("\n\n")
+    .trim();
 }
 
 function getProgressMessage(splitCompleted: number, ocrCompleted: number, pageCount: number, failedPages = 0): string {
   const failureMessage = failedPages === 0 ? "" : ` Failed ${failedPages}.`;
+
+  if (splitCompleted >= pageCount) {
+    return `OCR ${ocrCompleted}/${pageCount} pages.${failureMessage}`;
+  }
+
   return `Split ${splitCompleted}/${pageCount} pages. OCR ${ocrCompleted}/${pageCount} pages.${failureMessage}`;
 }
 
@@ -316,4 +452,25 @@ function getSelectedPdf(): File | null {
 
 function updateStartButton(): void {
   startButton.disabled = getSelectedPdf() === null;
+}
+
+function loadApiKey(): string {
+  try {
+    return localStorage.getItem(apiKeyStorageKey) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveApiKey(value: string): void {
+  try {
+    if (value) {
+      localStorage.setItem(apiKeyStorageKey, value);
+      return;
+    }
+
+    localStorage.removeItem(apiKeyStorageKey);
+  } catch {
+    // Ignore storage failures and keep the UI functional.
+  }
 }

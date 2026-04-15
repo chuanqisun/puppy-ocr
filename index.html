@@ -18,28 +18,26 @@
 
       <details>
         <summary>Settings</summary>
-        <label>
+        <label class="setting-option" for="setting-use-doc-orientation-classify">
           <input id="setting-use-doc-orientation-classify" type="checkbox" />
-          Use document orientation classify
+          <span class="setting-copy"><strong>Fix orientation</strong>: detect and correct images at 0°, 90°, 180°, and 270°</span>
         </label>
-        <label>
+        <label class="setting-option" for="setting-use-doc-unwarping">
           <input id="setting-use-doc-unwarping" type="checkbox" checked />
-          Use document unwarping
+          <span class="setting-copy"><strong>Fix distortion</strong>: correct distorted images, such as folds, tilting, warping</span>
         </label>
-        <label>
+        <label class="setting-option" for="setting-use-layout-detection">
           <input id="setting-use-layout-detection" type="checkbox" checked />
-          Use layout detection
+          <span class="setting-copy"
+            ><strong>Complex layout</strong>: segment and sort the document layout, then recognize content by region type. If your document contains only one
+            type of element-text, table, formula, or chart-you can disable this option for direct recognition</span
+          >
         </label>
       </details>
 
-      <p id="selected-file">No file selected.</p>
-
       <button id="start-ocr" type="button" disabled>Start OCR</button>
 
-      <p id="status" aria-live="polite">Select a PDF to begin.</p>
-
-      <h2>Result</h2>
-      <div id="result"></div>
+      <div id="result" hidden></div>
     </main>
 
     <script type="module" src="/src/main.ts"></script>
