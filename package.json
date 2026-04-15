@@ -6,30 +6,22 @@
   "scripts": {
     "dev": "concurrently npm:dev:*",
     "dev:web": "vite",
-    "dev:api": "node --watch server/index.mjs",
     "dev:worker": "npm --prefix worker run dev",
-    "api": "node server/index.mjs",
     "worker": "npm --prefix worker run dev",
     "worker:deploy": "npm --prefix worker run deploy",
     "worker:test": "npm --prefix worker run test",
-    "test": "vitest run",
+    "test": "npm run worker:test",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "devDependencies": {
-    "@types/three": "^0.183.1",
+    "@types/node": "^25.5.0",
     "concurrently": "^9.2.1",
-    "typescript": "~5.9.3",
-    "vite": "^8.0.1",
-    "vitest": "^4.1.1"
+    "typescript": "~6.0.2",
+    "vite": "^8.0.8",
+    "vitest": "^4.1.4"
   },
-  "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^5.2.1",
-    "idb-keyval": "^6.2.2",
-    "replicate": "^1.1.0",
-    "three": "^0.183.2"
-  },
+  "dependencies": {},
   "workspaces": [
     "worker"
   ]

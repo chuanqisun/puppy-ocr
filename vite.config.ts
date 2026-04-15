@@ -10,7 +10,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
-        creature: resolve(__dirname, "creature.html"),
       },
     },
   },

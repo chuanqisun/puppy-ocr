@@ -1,20 +1,28 @@
-import Replicate from 'replicate';
-
 const corsHeaders = {
 	'Access-Control-Allow-Origin': '*',
 	'Access-Control-Allow-Headers': 'Content-Type, x-api-key',
 	'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
 } as const;
 
-function jsonResponse(payload: unknown, status: number): Response {
-	return new Response(JSON.stringify(payload), {
-		status,
-		headers: {
-			'Content-Type': 'application/json',
-			...corsHeaders,
-		},
-	});
-}
+const DEFAULT_OCR_API_URL = 'https://89f849v6s7oe6fea.aistudio-app.com/layout-parsing';
+
+class BadRequestError extends Error {}
+
+type LayoutParsingPage = {
+	markdown?: {
+		text?: unknown;
+	};
+};
+
+type LayoutParsingResponse = {
+	result?: {
+		layoutParsingResults?: LayoutParsingPage[];
+	};
+};
+
+type WorkerEnv = {
+	OCR_API_URL?: string;
+};
 
 function textResponse(text: string, status = 200): Response {
 	return new Response(text, {
@@ -30,70 +38,129 @@ function extractApiKey(request: Request): string {
 	return request.headers.get('x-api-key')?.trim() || '';
 }
 
-async function handleGenerate(request: Request, prompt: unknown, referenceImage: unknown): Promise<Response> {
-	const normalizedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
-	const normalizedReferenceImage = typeof referenceImage === 'string' ? referenceImage.trim() : '';
-	const apiKey = extractApiKey(request);
-
-	if (!normalizedPrompt) {
-		return jsonResponse({ error: 'Missing required query parameter: prompt' }, 400);
-	}
-
-	if (!apiKey) {
-		return jsonResponse({ error: 'Missing API key. Provide it in the x-api-key header.' }, 401);
-	}
-
-	try {
-		const replicate = new Replicate({ auth: apiKey });
-		const output = await replicate.run('black-forest-labs/flux-2-klein-4b', {
-			input: {
-				images: normalizedReferenceImage ? [normalizedReferenceImage] : [],
-				prompt: normalizedPrompt,
-				image_format: 'webp',
-				aspect_ratio: '1:1',
-				output_quality: 95,
-				output_megapixels: '1',
-			},
-		});
-
-		const fileOutput = Array.isArray(output) ? output[0] : output;
-
-		if (!fileOutput || typeof fileOutput !== 'object' || !('url' in fileOutput) || typeof fileOutput.url !== 'function') {
-			throw new Error('Replicate did not return an image URL.');
-		}
-
-		const imageResponse = await fetch(fileOutput.url());
-
-		if (!imageResponse.ok) {
-			throw new Error(`Failed to fetch generated image: ${imageResponse.status}`);
-		}
-
-		const imageBytes = await imageResponse.arrayBuffer();
-		const outputContentType = imageResponse.headers.get('content-type') || 'image/webp';
-
-		return new Response(imageBytes, {
-			headers: {
-				'Content-Type': outputContentType,
-				'Cache-Control': 'no-store',
-				...corsHeaders,
-			},
-		});
-	} catch (error) {
-		console.error(error);
-		return jsonResponse({ error: error instanceof Error ? error.message : 'Image generation failed.' }, 500);
-	}
+function getOcrApiUrl(env: WorkerEnv): string {
+	return typeof env.OCR_API_URL === 'string' && env.OCR_API_URL.trim() ? env.OCR_API_URL.trim() : DEFAULT_OCR_API_URL;
 }
 
-async function parseRequestBody(request: Request): Promise<Record<string, unknown>> {
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+	return Buffer.from(buffer).toString('base64');
+}
+
+function extractPageText(payload: LayoutParsingResponse): string[] {
+	const results = payload.result?.layoutParsingResults;
+
+	if (!Array.isArray(results)) {
+		return [];
+	}
+
+	return results.map((page) => {
+		const text = page.markdown?.text;
+		return typeof text === 'string' ? text.trim() : '';
+	});
+}
+
+async function readPdfUpload(request: Request): Promise<{ fileBase64: string; filename: string | null }> {
+	const contentType = request.headers.get('content-type')?.toLowerCase() || '';
+
+	if (contentType.includes('multipart/form-data')) {
+		const formData = await request.formData();
+		const uploadedFile = formData.get('file');
+
+		if (!(uploadedFile instanceof File)) {
+			throw new BadRequestError('Missing PDF file. Submit multipart/form-data with a "file" field or send application/pdf bytes.');
+		}
+
+		if (uploadedFile.type && uploadedFile.type !== 'application/pdf') {
+			throw new BadRequestError('Uploaded file must be a PDF.');
+		}
+
+		const fileBuffer = await uploadedFile.arrayBuffer();
+
+		if (fileBuffer.byteLength === 0) {
+			throw new BadRequestError('Uploaded PDF is empty.');
+		}
+
+		return {
+			fileBase64: arrayBufferToBase64(fileBuffer),
+			filename: uploadedFile.name || null,
+		};
+	}
+
+	if (contentType.includes('application/pdf') || contentType.includes('application/octet-stream')) {
+		const fileBuffer = await request.arrayBuffer();
+
+		if (fileBuffer.byteLength === 0) {
+			throw new BadRequestError('Uploaded PDF is empty.');
+		}
+
+		return {
+			fileBase64: arrayBufferToBase64(fileBuffer),
+			filename: null,
+		};
+	}
+
+	throw new BadRequestError('Unsupported content type. Use multipart/form-data or application/pdf.');
+}
+
+async function handleOcr(request: Request, env: WorkerEnv): Promise<Response> {
+	const apiKey = extractApiKey(request);
+
+	if (!apiKey) {
+		return textResponse('Missing API key. Provide it in the x-api-key header.', 401);
+	}
+
+	let upload: { fileBase64: string; filename: string | null };
+
 	try {
-		return (await request.json()) as Record<string, unknown>;
-	} catch {
-		throw new Error('Request body must be valid JSON.');
+		upload = await readPdfUpload(request);
+	} catch (error) {
+		if (error instanceof BadRequestError) {
+			return textResponse(error.message, 400);
+		}
+
+		console.error(error);
+		return textResponse('Failed to read uploaded PDF.', 400);
+	}
+
+	try {
+		const upstreamResponse = await fetch(getOcrApiUrl(env), {
+			method: 'POST',
+			headers: {
+				Authorization: `token ${apiKey}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				file: upload.fileBase64,
+				fileType: 0,
+				useDocOrientationClassify: false,
+				useDocUnwarping: false,
+				useChartRecognition: false,
+			}),
+		});
+
+		if (!upstreamResponse.ok) {
+			const errorText = await upstreamResponse.text();
+			const message = errorText.trim() || `OCR upstream request failed with status ${upstreamResponse.status}.`;
+			return textResponse(message, 502);
+		}
+
+		const payload = (await upstreamResponse.json()) as LayoutParsingResponse;
+		const pages = extractPageText(payload);
+		const text = pages.filter(Boolean).join('\n\n').trim();
+
+		if (!text) {
+			return textResponse('OCR response did not include any text.', 502);
+		}
+
+		return textResponse(text, 200);
+	} catch (error) {
+		console.error(error);
+		return textResponse(error instanceof Error ? error.message : 'OCR request failed.', 500);
 	}
 }
 
 export default {
-	async fetch(request, env): Promise<Response> {
+	async fetch(request, env, _ctx): Promise<Response> {
 		const url = new URL(request.url);
 
 		if (request.method === 'OPTIONS') {
@@ -104,26 +171,17 @@ export default {
 		}
 
 		if (url.pathname === '/' && request.method === 'GET') {
-			return textResponse('life-config image API is running.');
+			return textResponse('puppy-ocr OCR API is running.');
 		}
 
-		if (url.pathname !== '/api/generate') {
+		if (url.pathname !== '/api/ocr') {
 			return textResponse('Not found', 404);
 		}
 
-		if (request.method === 'GET') {
-			return handleGenerate(request, url.searchParams.get('prompt'), url.searchParams.get('referenceImage'));
-		}
-
 		if (request.method === 'POST') {
-			try {
-				const body = await parseRequestBody(request);
-				return handleGenerate(request, body.prompt, body.referenceImage);
-			} catch (error) {
-				return jsonResponse({ error: error instanceof Error ? error.message : 'Request body must be valid JSON.' }, 400);
-			}
+			return handleOcr(request, env);
 		}
 
 		return textResponse('Method not allowed', 405);
 	},
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<WorkerEnv>;

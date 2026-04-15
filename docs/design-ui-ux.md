@@ -1,7 +1,0 @@
-- use css variables for consistency
-- organize stylesheet start with :root {} variables, then global styles for semantic html elements, followed by component classes, and finally utility classes
-- minialist aesthetics, clean, high contrast, space efficient
-- monospace typography, avoid large font sizes
-- judicious use of space, maximize space efficiency for information density
-- judicious use of color, consistently use accent color on what demands attention.
-- use 1px solid dividers and borders only when necessary. Avoid nesting boxes and containers
