@@ -7,31 +7,24 @@
     <title>Puppy OCR</title>
   </head>
   <body>
-    <header><h1>Puppy OCR</h1></header>
+    <header>
+      <h1>🐶<br />Puppy OCR</h1>
+    </header>
     <main>
-      <form>
-        <label for="api-key">API key</label>
-        <input id="api-key" name="apiKey" type="password" autocomplete="off" />
+      <form id="ocr-form">
+        <label>
+          <span>API key</span>
+          <input id="api-key" name="apiKey" type="password" autocomplete="off" />
+        </label>
 
-        <label for="pdf-file">PDF file</label>
-        <input id="pdf-file" name="file" type="file" accept="application/pdf" />
+        <label class="file-field">
+          <span>PDF file</span>
+          <span class="file-picker-text">Choose PDF</span>
+          <output id="pdf-file-name" aria-live="polite">No file selected</output>
+          <input id="pdf-file" name="file" type="file" accept="application/pdf" />
+        </label>
 
-        <label class="setting-option" for="setting-use-doc-orientation-classify">
-          <input id="setting-use-doc-orientation-classify" type="checkbox" />
-          <span class="setting-copy"><strong>Fix orientation</strong>: detect and correct images at 0°, 90°, 180°, and 270°</span>
-        </label>
-        <label class="setting-option" for="setting-use-doc-unwarping">
-          <input id="setting-use-doc-unwarping" type="checkbox" checked />
-          <span class="setting-copy"><strong>Fix distortion</strong>: correct distorted images, such as folds, tilting, warping</span>
-        </label>
-        <label class="setting-option" for="setting-use-layout-detection">
-          <input id="setting-use-layout-detection" type="checkbox" checked />
-          <span class="setting-copy"
-            ><strong>Complex layout</strong>: segment and sort the document layout, then recognize content by region type. If your document contains only one
-            type of element-text, table, formula, or chart-you can disable this option for direct recognition</span
-          >
-        </label>
-        <button id="start-ocr" type="button" disabled>Start OCR</button>
+        <button id="start-ocr" type="submit" disabled>Start OCR</button>
       </form>
 
       <div id="result" hidden></div>

@@ -5,11 +5,10 @@ import "./style.css";
 // DOM elements
 const apiBaseUrl = (import.meta.env.VITE_IMAGE_API_BASE_URL as string | undefined)?.trim().replace(/\/$/, "") ?? "";
 const apiKeyStorageKey = "puppy-ocr-api-key";
+const form = getRequiredElement<HTMLFormElement>("ocr-form");
 const apiKeyInput = getRequiredElement<HTMLInputElement>("api-key");
 const fileInput = getRequiredElement<HTMLInputElement>("pdf-file");
-const useDocOrientationClassifyInput = getRequiredElement<HTMLInputElement>("setting-use-doc-orientation-classify");
-const useDocUnwarpingInput = getRequiredElement<HTMLInputElement>("setting-use-doc-unwarping");
-const useLayoutDetectionInput = getRequiredElement<HTMLInputElement>("setting-use-layout-detection");
+const fileNameOutput = getRequiredElement<HTMLOutputElement>("pdf-file-name");
 const startButton = getRequiredElement<HTMLButtonElement>("start-ocr");
 const result = getRequiredElement<HTMLDivElement>("result");
 
@@ -22,12 +21,6 @@ type SplitPageResult = {
 type OcrRunSummary = {
   failedPages: number;
   pageCount: number;
-};
-
-type ClientOcrSettings = {
-  useDocOrientationClassify: boolean;
-  useDocUnwarping: boolean;
-  useLayoutDetection: boolean;
 };
 
 type ResultTable = {
@@ -55,6 +48,8 @@ main();
 async function main() {
   apiKeyInput.value = loadApiKey();
   clearResults();
+  syncFileSelection();
+  updateStartButton();
 
   apiKeyInput.addEventListener("input", () => {
     saveApiKey(apiKeyInput.value);
@@ -62,13 +57,15 @@ async function main() {
 
   fileInput.addEventListener("change", () => {
     clearResults();
+    syncFileSelection();
     updateStartButton();
   });
 
-  startButton.addEventListener("click", async () => {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
     const file = getSelectedPdf();
     const apiKey = apiKeyInput.value.trim();
-    const ocrSettings = getClientOcrSettings();
 
     if (!file) {
       return;
@@ -86,7 +83,7 @@ async function main() {
     clearResults();
 
     try {
-      await splitAndOcrPdf(file, apiKey, ocrSettings);
+      await splitAndOcrPdf(file, apiKey);
     } catch (error) {
       const message = error instanceof Error ? error.message : "OCR request failed.";
       clearResults();
@@ -97,7 +94,7 @@ async function main() {
   });
 }
 
-async function splitAndOcrPdf(file: File, apiKey: string, ocrSettings: ClientOcrSettings): Promise<OcrRunSummary> {
+async function splitAndOcrPdf(file: File, apiKey: string): Promise<OcrRunSummary> {
   const sourcePdf = await PDFDocument.load(await file.arrayBuffer());
   const pageCount = sourcePdf.getPageCount();
   const resultTable = createPageResultRows(pageCount);
@@ -123,7 +120,7 @@ async function splitAndOcrPdf(file: File, apiKey: string, ocrSettings: ClientOcr
         pageRow.setStatus("running");
 
         try {
-          const text = await runOcrRequest(page.file, apiKey, ocrSettings);
+          const text = await runOcrRequest(page.file, apiKey);
           pageRow.setContent(text || "[No text returned]");
           pageRow.setStatus("success");
         } catch (error) {
@@ -167,10 +164,9 @@ async function splitPdfPage(sourcePdf: PDFDocument, originalFilename: string, pa
   };
 }
 
-async function runOcrRequest(file: File, apiKey: string, ocrSettings: ClientOcrSettings): Promise<string> {
+async function runOcrRequest(file: File, apiKey: string): Promise<string> {
   const formData = new FormData();
   formData.set("file", file);
-  formData.set("settings", JSON.stringify(ocrSettings));
 
   const response = await fetch(`${apiBaseUrl}/api/ocr`, {
     method: "POST",
@@ -329,7 +325,7 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
   return {
     element: row,
     setStatus(value: string) {
-      rowStatus.textContent = value;
+      rowStatus.textContent = formatStatusLabel(value);
     },
     setContent(value: string) {
       currentContent = value;
@@ -366,6 +362,18 @@ function appendRunError(message: string): void {
   errorMessage.textContent = message;
   result.hidden = false;
   result.append(errorMessage);
+}
+
+function formatStatusLabel(value: string): string {
+  if (value === "success") {
+    return "✅";
+  }
+
+  if (value === "error") {
+    return "⚠️";
+  }
+
+  return value;
 }
 
 function buildCombinedOutput(rows: PageResultRow[], includePageNumbers: boolean): string {
@@ -409,14 +417,6 @@ function createDownloadFilename(originalFilename: string, pageNumber: number, pa
   return `${baseName}-ocr-${formatPageNumber(pageNumber, pageCount)}.txt`;
 }
 
-function getClientOcrSettings(): ClientOcrSettings {
-  return {
-    useDocOrientationClassify: useDocOrientationClassifyInput.checked,
-    useDocUnwarping: useDocUnwarpingInput.checked,
-    useLayoutDetection: useLayoutDetectionInput.checked,
-  };
-}
-
 function createPageFilename(originalFilename: string, pageNumber: number): string {
   const baseName = originalFilename.replace(/\.pdf$/i, "") || "document";
   return `${baseName}-page-${pageNumber}.pdf`;
@@ -448,6 +448,13 @@ function getRequiredElement<T extends HTMLElement>(id: string): T {
 
 function getSelectedPdf(): File | null {
   return fileInput.files?.[0] ?? null;
+}
+
+function syncFileSelection(): void {
+  const selectedFile = getSelectedPdf();
+  const label = selectedFile?.name ?? "No file selected";
+  fileNameOutput.value = label;
+  fileNameOutput.textContent = label;
 }
 
 function updateStartButton(): void {
