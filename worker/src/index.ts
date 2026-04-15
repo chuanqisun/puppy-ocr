@@ -109,6 +109,7 @@ type OcrUpload = {
 };
 
 const DEFAULT_OCR_API_V2_JOBS_URL = 'https://paddleocr.aistudio-app.com/api/v2/ocr/jobs';
+const DEFAULT_OCR_POLL_INTERVAL_MS = 3000;
 const OCR_V2_MODEL = 'PaddleOCR-VL-1.5';
 
 type V2JobStatus =
@@ -143,7 +144,7 @@ type JsonlLine = {
 	result?: {
 		layoutParsingResults?: Array<{
 			markdown?: {
-				text?: unknown;
+				text?: string;
 			};
 		}>;
 	};
@@ -270,7 +271,7 @@ async function fetchJsonlPageTexts(jsonlUrl: string): Promise<string[]> {
 
 			if (Array.isArray(results)) {
 				for (const res of results) {
-					pageTexts.push(typeof res.markdown?.text === 'string' ? res.markdown.text.trim() : '');
+					pageTexts.push(res.markdown?.text?.trim() ?? '');
 				}
 			}
 		} catch {
@@ -321,7 +322,7 @@ async function handleOcrStream(request: Request, env: WorkerEnv, ctx: ExecutionC
 	}
 
 	const rawPollInterval = parseInt(env.OCR_POLL_INTERVAL_MS ?? '');
-	const pollIntervalMs = Number.isFinite(rawPollInterval) && rawPollInterval >= 0 ? rawPollInterval : 3000;
+	const pollIntervalMs = Number.isFinite(rawPollInterval) && rawPollInterval >= 0 ? rawPollInterval : DEFAULT_OCR_POLL_INTERVAL_MS;
 	const encoder = new TextEncoder();
 	const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
 	const writer = writable.getWriter();

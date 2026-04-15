@@ -204,11 +204,6 @@ function createResultHeader(): {
   actions.append(toggleAllButton, downloadCombinedButton, downloadPagedButton);
   row.append(progress, actions);
 
-  toggleAllButton.addEventListener("click", () => {
-    // Resolved later via syncControls closure — rows are provided on each sync call
-    toggleAllButton.dispatchEvent(new CustomEvent("toggle-all"));
-  });
-
   function syncControls(rows: (PageResultRow & { element: HTMLElement })[]): void {
     const hasContent = rows.some((r) => r.hasContent());
     toggleAllButton.disabled = !hasContent;
