@@ -96,6 +96,19 @@ form > label > span:first-child {
   letter-spacing: 0.04em;
 }
 
+.field-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.field-label a {
+  color: inherit;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+}
+
 input[type="password"],
 button {
   min-width: 0;
