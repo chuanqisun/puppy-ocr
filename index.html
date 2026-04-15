@@ -16,6 +16,22 @@
       <label for="pdf-file">PDF file</label>
       <input id="pdf-file" name="file" type="file" accept="application/pdf" />
 
+      <details>
+        <summary>Settings</summary>
+        <label>
+          <input id="setting-use-doc-orientation-classify" type="checkbox" />
+          Use document orientation classify
+        </label>
+        <label>
+          <input id="setting-use-doc-unwarping" type="checkbox" checked />
+          Use document unwarping
+        </label>
+        <label>
+          <input id="setting-use-layout-detection" type="checkbox" checked />
+          Use layout detection
+        </label>
+      </details>
+
       <p id="selected-file">No file selected.</p>
 
       <button id="start-ocr" type="button" disabled>Start OCR</button>

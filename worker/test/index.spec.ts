@@ -107,10 +107,97 @@ describe('puppy-ocr worker', () => {
 		expect(body).toEqual({
 			file: 'JVBERg==',
 			fileType: 0,
+			layoutNms: true,
+			layoutShapeMode: 'auto',
+			markdownIgnoreLabels: ['header', 'header_image', 'footer', 'footer_image', 'number', 'footnote', 'aside_text'],
+			maxPixels: 2822400,
+			mergeTables: false,
+			minPixels: 147384,
+			promptLabel: 'ocr',
+			relevelTitles: false,
+			repetitionPenalty: 1,
 			useChartRecognition: false,
 			useDocOrientationClassify: false,
 			useDocUnwarping: false,
+			useLayoutDetection: false,
+			useOcrForImageBlock: false,
+			useSealRecognition: false,
+			temperature: 0,
+			topP: 1,
 		});
+	});
+
+	it('passes client-provided OCR settings overrides from multipart form data', async () => {
+		const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					result: {
+						layoutParsingResults: [{ markdown: { text: 'Configured page' } }],
+					},
+				}),
+				{
+					status: 200,
+					headers: { 'Content-Type': 'application/json' },
+				}
+			)
+		);
+
+		const formData = new FormData();
+		formData.set('file', new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], 'sample.pdf', { type: 'application/pdf' }));
+		formData.set(
+			'settings',
+			JSON.stringify({
+				useDocUnwarping: true,
+				useLayoutDetection: true,
+				temperature: 0.25,
+				markdownIgnoreLabels: ['header'],
+			})
+		);
+
+		const response = await dispatch(
+			new IncomingRequest('https://example.com/api/ocr', {
+				method: 'POST',
+				headers: {
+					'x-api-key': 'test-key',
+				},
+				body: formData,
+			})
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe('Configured page');
+
+		const [, init] = fetchSpy.mock.calls[0];
+		const body = JSON.parse(String(init?.body));
+		expect(body).toEqual(
+			expect.objectContaining({
+				file: 'JVBERg==',
+				fileType: 0,
+				markdownIgnoreLabels: ['header'],
+				temperature: 0.25,
+				useDocUnwarping: true,
+				useLayoutDetection: true,
+			})
+		);
+	});
+
+	it('rejects unsupported OCR settings', async () => {
+		const formData = new FormData();
+		formData.set('file', new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], 'sample.pdf', { type: 'application/pdf' }));
+		formData.set('settings', JSON.stringify({ unsupportedFlag: true }));
+
+		const response = await dispatch(
+			new IncomingRequest('https://example.com/api/ocr', {
+				method: 'POST',
+				headers: {
+					'x-api-key': 'test-key',
+				},
+				body: formData,
+			})
+		);
+
+		expect(response.status).toBe(400);
+		expect(await response.text()).toBe('Unsupported OCR setting "unsupportedFlag".');
 	});
 
 	it('returns a bad gateway error when the OCR upstream fails', async () => {
