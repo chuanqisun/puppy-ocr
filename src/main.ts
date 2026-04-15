@@ -386,10 +386,10 @@ function getProgressMessage(splitCompleted: number, ocrCompleted: number, pageCo
   const failureMessage = failedPages === 0 ? "" : ` Failed ${failedPages}.`;
 
   if (splitCompleted >= pageCount) {
-    return `OCR ${ocrCompleted}/${pageCount} pages.${failureMessage}`;
+    return `OCR ${ocrCompleted}/${pageCount} pages ${failureMessage}`;
   }
 
-  return `Split ${splitCompleted}/${pageCount} pages. OCR ${ocrCompleted}/${pageCount} pages.${failureMessage}`;
+  return `Split ${splitCompleted}/${pageCount} pages. OCR ${ocrCompleted}/${pageCount} pages ${failureMessage}`;
 }
 
 function getCompletionMessage(summary: OcrRunSummary): string {

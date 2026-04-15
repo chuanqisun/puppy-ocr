@@ -7,17 +7,15 @@
     <title>Puppy OCR</title>
   </head>
   <body>
+    <header><h1>Puppy OCR</h1></header>
     <main>
-      <h1>Puppy OCR</h1>
+      <form>
+        <label for="api-key">API key</label>
+        <input id="api-key" name="apiKey" type="password" autocomplete="off" />
 
-      <label for="api-key">API key</label>
-      <input id="api-key" name="apiKey" type="password" autocomplete="off" />
+        <label for="pdf-file">PDF file</label>
+        <input id="pdf-file" name="file" type="file" accept="application/pdf" />
 
-      <label for="pdf-file">PDF file</label>
-      <input id="pdf-file" name="file" type="file" accept="application/pdf" />
-
-      <details>
-        <summary>Settings</summary>
         <label class="setting-option" for="setting-use-doc-orientation-classify">
           <input id="setting-use-doc-orientation-classify" type="checkbox" />
           <span class="setting-copy"><strong>Fix orientation</strong>: detect and correct images at 0°, 90°, 180°, and 270°</span>
@@ -33,9 +31,8 @@
             type of element-text, table, formula, or chart-you can disable this option for direct recognition</span
           >
         </label>
-      </details>
-
-      <button id="start-ocr" type="button" disabled>Start OCR</button>
+        <button id="start-ocr" type="button" disabled>Start OCR</button>
+      </form>
 
       <div id="result" hidden></div>
     </main>

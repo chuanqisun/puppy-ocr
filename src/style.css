@@ -2,21 +2,6 @@ html {
   font-family: system-ui, sans-serif;
 }
 
-main {
-  display: grid;
-  gap: 0.5rem;
-  padding: 0.5rem;
-}
-
-details {
-  display: grid;
-  gap: 0.75rem;
-}
-
-details[open] {
-  padding-bottom: 0.25rem;
-}
-
 .setting-option {
   display: flex;
   align-items: flex-start;
@@ -69,16 +54,4 @@ details[open] {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-@media (max-width: 720px) {
-  .result-header,
-  .page-result {
-    grid-template-columns: 1fr;
-  }
-
-  .result-header-actions,
-  .page-result-actions {
-    justify-content: flex-start;
-  }
 }
