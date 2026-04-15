@@ -5,7 +5,7 @@ import { defineConfig } from "vite";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  base: "/life-config/",
+  base: "/puppy-ocr/",
   build: {
     rollupOptions: {
       input: {
