@@ -114,16 +114,16 @@ describe('puppy-ocr worker', () => {
 			mergeTables: false,
 			minPixels: 147384,
 			promptLabel: 'ocr',
-			relevelTitles: false,
+			relevelTitles: true,
 			repetitionPenalty: 1,
-			useChartRecognition: false,
-			useDocOrientationClassify: false,
-			useDocUnwarping: false,
-			useLayoutDetection: false,
-			useOcrForImageBlock: false,
-			useSealRecognition: false,
 			temperature: 0,
 			topP: 1,
+			useChartRecognition: false,
+			useDocOrientationClassify: false,
+			useDocUnwarping: true,
+			useLayoutDetection: true,
+			useOcrForImageBlock: false,
+			useSealRecognition: false,
 		});
 	});
 
