@@ -10,6 +10,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
+        async: resolve(__dirname, "async.html"),
       },
     },
   },

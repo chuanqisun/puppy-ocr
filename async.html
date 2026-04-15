@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐶</text></svg>" />
+    <title>Puppy OCR (Async)</title>
+  </head>
+  <body>
+    <header>
+      <h1>🐶<br />Puppy OCR</h1>
+    </header>
+    <main>
+      <form id="ocr-form">
+        <label>
+          <span>API key</span>
+          <input id="api-key" name="apiKey" type="password" autocomplete="off" />
+        </label>
+
+        <label class="file-field">
+          <span>PDF file</span>
+          <span class="file-picker-text">Choose PDF</span>
+          <output id="pdf-file-name" aria-live="polite">No file selected</output>
+          <input id="pdf-file" name="file" type="file" accept="application/pdf" />
+        </label>
+
+        <button id="start-ocr" type="submit" disabled>Start OCR</button>
+      </form>
+
+      <div id="result" hidden></div>
+    </main>
+    <footer>Made with 🦴 by puppies</footer>
+
+    <script type="module" src="/src/main-async.ts"></script>
+  </body>
+</html>
