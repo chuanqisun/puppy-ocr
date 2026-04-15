@@ -300,10 +300,11 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
   const heading = document.createElement("strong");
   heading.textContent = `Page ${formatPageNumber(pageNumber, pageCount)}`;
 
+  const statusGroup = document.createElement("span");
+  statusGroup.className = "page-result-status";
+
   const rowStatus = document.createElement("span");
   rowStatus.textContent = "queued";
-
-  details.append(heading, rowStatus);
 
   const actions = document.createElement("div");
   actions.className = "page-result-actions";
@@ -323,7 +324,9 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
   retryButton.textContent = "Retry";
   retryButton.hidden = true;
 
-  actions.append(toggleButton, downloadButton, retryButton);
+  statusGroup.append(rowStatus, retryButton);
+  details.append(heading, statusGroup);
+  actions.append(toggleButton, downloadButton);
 
   const body = document.createElement("pre");
   body.className = "page-result-body";

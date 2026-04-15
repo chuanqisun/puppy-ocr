@@ -244,6 +244,17 @@ input:disabled {
   align-items: baseline;
 }
 
+.page-result-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.page-result-status > button {
+  min-height: auto;
+  padding: 0.1rem 0.4rem;
+}
+
 .result-header-actions,
 .page-result-actions {
   display: flex;
