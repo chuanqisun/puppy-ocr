@@ -1,5 +1,3 @@
-import { PDFDocument } from "pdf-lib";
-import { from, lastValueFrom, mergeMap, toArray } from "rxjs";
 import "./style.css";
 
 // DOM elements
@@ -11,17 +9,6 @@ const fileInput = getRequiredElement<HTMLInputElement>("pdf-file");
 const fileNameOutput = getRequiredElement<HTMLOutputElement>("pdf-file-name");
 const startButton = getRequiredElement<HTMLButtonElement>("start-ocr");
 const result = getRequiredElement<HTMLDivElement>("result");
-
-type SplitPageResult = {
-  pageIndex: number;
-  pageNumber: number;
-  file: File;
-};
-
-type OcrRunSummary = {
-  failedPages: number;
-  pageCount: number;
-};
 
 type PageOcrStatus = "queued" | "running" | "success" | "error";
 
@@ -39,13 +26,17 @@ type PageResultRow = {
   setStatus: (value: PageOcrStatus) => void;
   setContent: (value: string) => void;
   setDownloadName: (value: string) => void;
-  setRetryAction: (value: (() => void | Promise<void>) | null) => void;
   setExpanded: (value: boolean) => void;
   isExpanded: () => boolean;
   hasContent: () => boolean;
   getContent: () => string;
   getPageNumber: () => number;
   getStatus: () => PageOcrStatus;
+};
+
+type SseEvent = {
+  event: string;
+  data: string;
 };
 
 main();
@@ -87,7 +78,7 @@ async function main() {
     clearResults();
 
     try {
-      await splitAndOcrPdf(file, apiKey);
+      await streamOcrPdf(file, apiKey);
     } catch (error) {
       const message = error instanceof Error ? error.message : "OCR request failed.";
       clearResults();
@@ -98,97 +89,13 @@ async function main() {
   });
 }
 
-async function splitAndOcrPdf(file: File, apiKey: string): Promise<OcrRunSummary> {
-  const sourcePdf = await PDFDocument.load(await file.arrayBuffer());
-  const pageCount = sourcePdf.getPageCount();
-  const resultTable = createPageResultRows(pageCount);
-  const splitPages = new Array<SplitPageResult>(pageCount);
+async function streamOcrPdf(file: File, apiKey: string): Promise<void> {
+  const statusMessage = showStatusMessage("Uploading PDF...");
 
-  updateResultSummary(resultTable.rows, resultTable.header, pageCount);
-
-  const pageIndices = Array.from({ length: pageCount }, (_, pageIndex) => pageIndex);
-  await lastValueFrom(
-    from(pageIndices).pipe(
-      mergeMap(async (pageIndex) => {
-        resultTable.rows[pageIndex].setStatus("running");
-        const page = await splitPdfPage(sourcePdf, file.name, pageIndex);
-        splitPages[pageIndex] = page;
-        resultTable.rows[page.pageIndex].setDownloadName(createDownloadFilename(file.name, page.pageNumber, pageCount));
-        resultTable.rows[page.pageIndex].setRetryAction(() => retryPageOcr(page.pageIndex, splitPages, resultTable, apiKey, pageCount));
-        return page;
-      }),
-      mergeMap(async (page) => {
-        await processPageOcr(page, resultTable, apiKey, pageCount);
-      }, 10),
-      toArray()
-    )
-  );
-
-  const summary = {
-    failedPages: countRowsWithStatus(resultTable.rows, "error"),
-    pageCount,
-  };
-
-  updateResultSummary(resultTable.rows, resultTable.header, pageCount);
-
-  return summary;
-}
-
-async function processPageOcr(page: SplitPageResult, resultTable: ResultTable, apiKey: string, pageCount: number): Promise<void> {
-  const pageRow = resultTable.rows[page.pageIndex];
-  pageRow.setStatus("running");
-
-  try {
-    const text = await runOcrRequest(page.file, apiKey);
-    pageRow.setContent(text || "[No text returned]");
-    pageRow.setStatus("success");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "OCR request failed.";
-    pageRow.setContent(message);
-    pageRow.setStatus("error");
-  } finally {
-    updateResultSummary(resultTable.rows, resultTable.header, pageCount);
-    resultTable.header.syncControls();
-  }
-}
-
-async function retryPageOcr(
-  pageIndex: number,
-  splitPages: Array<SplitPageResult | undefined>,
-  resultTable: ResultTable,
-  apiKey: string,
-  pageCount: number
-): Promise<void> {
-  const page = splitPages[pageIndex];
-
-  if (!page) {
-    return;
-  }
-
-  await processPageOcr(page, resultTable, apiKey, pageCount);
-}
-
-async function splitPdfPage(sourcePdf: PDFDocument, originalFilename: string, pageIndex: number): Promise<SplitPageResult> {
-  const pageNumber = pageIndex + 1;
-  const splitPdf = await PDFDocument.create();
-  const [copiedPage] = await splitPdf.copyPages(sourcePdf, [pageIndex]);
-  splitPdf.addPage(copiedPage);
-  const splitPdfBytes = await splitPdf.save();
-
-  return {
-    pageIndex,
-    pageNumber,
-    file: new File([toArrayBuffer(splitPdfBytes)], createPageFilename(originalFilename, pageNumber), {
-      type: "application/pdf",
-    }),
-  };
-}
-
-async function runOcrRequest(file: File, apiKey: string): Promise<string> {
   const formData = new FormData();
   formData.set("file", file);
 
-  const response = await fetch(`${apiBaseUrl}/api/ocr`, {
+  const response = await fetch(`${apiBaseUrl}/api/ocr/stream`, {
     method: "POST",
     headers: {
       "x-api-key": apiKey,
@@ -196,13 +103,134 @@ async function runOcrRequest(file: File, apiKey: string): Promise<string> {
     body: formData,
   });
 
-  const output = await response.text();
-
   if (!response.ok) {
-    throw new Error(output || `OCR request failed with status ${response.status}.`);
+    statusMessage.remove();
+    const errorText = await response.text();
+    throw new Error(errorText || `OCR request failed with status ${response.status}.`);
   }
 
-  return output.trim();
+  if (!response.body) {
+    statusMessage.remove();
+    throw new Error("No response stream available.");
+  }
+
+  let resultTable: ResultTable | null = null;
+  let totalPages = 0;
+
+  for await (const { event, data } of parseSseStream(response.body)) {
+    const payload = JSON.parse(data);
+
+    switch (event) {
+      case "job-created":
+        statusMessage.update("Job created, waiting for processing...");
+        break;
+
+      case "progress":
+        if (payload.state === "pending") {
+          statusMessage.update("Waiting in queue...");
+        } else if (payload.state === "running") {
+          const extracted = payload.extractedPages ?? 0;
+          const total = payload.totalPages ?? 0;
+          statusMessage.update(`Processing: ${extracted} of ${total} pages extracted...`);
+        }
+        break;
+
+      case "total-pages":
+        totalPages = payload.totalPages;
+        statusMessage.remove();
+        resultTable = createPageResultRows(totalPages, file.name);
+        updateResultSummary(resultTable.rows, resultTable.header, totalPages);
+        break;
+
+      case "page": {
+        if (!resultTable) break;
+        const pageIndex = payload.pageIndex as number;
+        const pageRow = resultTable.rows[pageIndex];
+        if (pageRow) {
+          const text = (payload.text as string) || "[No text returned]";
+          pageRow.setContent(text);
+          pageRow.setStatus("success");
+          updateResultSummary(resultTable.rows, resultTable.header, totalPages);
+          resultTable.header.syncControls();
+        }
+        break;
+      }
+
+      case "done":
+        if (resultTable) {
+          for (const row of resultTable.rows) {
+            if (row.getStatus() === "queued") {
+              row.setContent("[No text returned]");
+              row.setStatus("error");
+            }
+          }
+          updateResultSummary(resultTable.rows, resultTable.header, totalPages);
+          resultTable.header.syncControls();
+        }
+        break;
+
+      case "error":
+        statusMessage.remove();
+        throw new Error(payload.message || "OCR processing failed.");
+    }
+  }
+}
+
+function showStatusMessage(text: string): { update: (text: string) => void; remove: () => void } {
+  const message = document.createElement("p");
+  message.className = "status-message";
+  message.textContent = text;
+  result.hidden = false;
+  result.append(message);
+
+  return {
+    update(newText: string) {
+      message.textContent = newText;
+    },
+    remove() {
+      message.remove();
+    },
+  };
+}
+
+async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+
+    for (const part of parts) {
+      const parsed = parseSseEventBlock(part);
+      if (parsed) yield parsed;
+    }
+  }
+
+  if (buffer.trim()) {
+    const parsed = parseSseEventBlock(buffer);
+    if (parsed) yield parsed;
+  }
+}
+
+function parseSseEventBlock(block: string): SseEvent | null {
+  let event = "";
+  let data = "";
+
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event: ")) {
+      event = line.slice(7);
+    } else if (line.startsWith("data: ")) {
+      data = line.slice(6);
+    }
+  }
+
+  return event && data ? { event, data } : null;
 }
 
 function clearResults(): void {
@@ -210,9 +238,13 @@ function clearResults(): void {
   result.hidden = true;
 }
 
-function createPageResultRows(pageCount: number): ResultTable {
+function createPageResultRows(pageCount: number, filename: string): ResultTable {
   let syncHeaderControls = () => {};
-  const rows = Array.from({ length: pageCount }, (_, pageIndex) => createPageResultRow(pageIndex + 1, pageCount, () => syncHeaderControls()));
+  const rows = Array.from({ length: pageCount }, (_, pageIndex) => {
+    const row = createPageResultRow(pageIndex + 1, pageCount, () => syncHeaderControls());
+    row.setDownloadName(createDownloadFilename(filename, pageIndex + 1, pageCount));
+    return row;
+  });
   clearResults();
   const header = createResultHeader(pageCount, rows);
   syncHeaderControls = header.syncControls;
@@ -318,12 +350,7 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
   downloadButton.textContent = "Download";
   downloadButton.disabled = true;
 
-  const retryButton = document.createElement("button");
-  retryButton.type = "button";
-  retryButton.textContent = "Retry";
-  retryButton.hidden = true;
-
-  actions.append(toggleButton, downloadButton, retryButton);
+  actions.append(toggleButton, downloadButton);
 
   const body = document.createElement("pre");
   body.className = "page-result-body";
@@ -334,7 +361,6 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
   let expanded = false;
   let contentAvailable = false;
   let currentStatus: PageOcrStatus = "queued";
-  let retryAction: (() => void | Promise<void>) | null = null;
 
   function syncExpandedState(): void {
     body.hidden = !(contentAvailable && expanded);
@@ -351,10 +377,6 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
     downloadTextFile(downloadName, currentContent);
   });
 
-  retryButton.addEventListener("click", () => {
-    void retryAction?.();
-  });
-
   row.append(details, actions, body);
 
   return {
@@ -362,7 +384,6 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
     setStatus(value: PageOcrStatus) {
       currentStatus = value;
       rowStatus.textContent = formatStatusLabel(value);
-      retryButton.hidden = value !== "error" || retryAction === null;
     },
     setContent(value: string) {
       currentContent = value;
@@ -374,10 +395,6 @@ function createPageResultRow(pageNumber: number, pageCount: number, onExpandedCh
     },
     setDownloadName(value: string) {
       downloadName = value;
-    },
-    setRetryAction(value: (() => void | Promise<void>) | null) {
-      retryAction = value;
-      retryButton.hidden = currentStatus !== "error" || retryAction === null;
     },
     setExpanded(value: boolean) {
       expanded = value;
@@ -457,11 +474,6 @@ function createDownloadFilename(originalFilename: string, pageNumber: number, pa
   return `${baseName}-ocr-${formatPageNumber(pageNumber, pageCount)}.txt`;
 }
 
-function createPageFilename(originalFilename: string, pageNumber: number): string {
-  const baseName = originalFilename.replace(/\.pdf$/i, "") || "document";
-  return `${baseName}-page-${pageNumber}.pdf`;
-}
-
 function downloadTextFile(filename: string, content: string): void {
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
   const objectUrl = URL.createObjectURL(blob);
@@ -470,10 +482,6 @@ function downloadTextFile(filename: string, content: string): void {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(objectUrl);
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return new Uint8Array(bytes).buffer;
 }
 
 function getRequiredElement<T extends HTMLElement>(id: string): T {
